@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import flet as ft
 
 import neuronook.config as config_module
+import neuronook.data.fetch as fetch_module
 from neuronook.data.db import NeuroNookDB
 from neuronook.ui.app import NeuroNookApp
 
@@ -34,6 +35,7 @@ class FakePage:
         self.overlay = []
         self._dialog = None
         self.update_calls = 0
+        self.launched_urls = []
 
     def add(self, *controls):
         self.controls.extend(controls)
@@ -46,6 +48,9 @@ class FakePage:
 
     def pop_dialog(self):
         self._dialog = None
+
+    def launch_url(self, url):
+        self.launched_urls.append(url)
 
 
 class FakeEvent:
@@ -93,7 +98,7 @@ def run():
         print("open new resource dialog + save...")
         app._open_new_resource_dialog()
         dialog = page._dialog
-        title_field, type_dropdown, notes_field = dialog.content.controls
+        title_field, type_dropdown, url_field, notes_field = dialog.content.controls
         title_field.value = "OSHA asbestos guidance PDF"
         type_dropdown.value = "document"
         save_fn = dialog.actions[1].on_click
@@ -235,6 +240,82 @@ def run():
         print("delete subject...")
         app._delete_subject(subject_id)
         assert db.list_subjects() == []
+
+        print("resource: save a link, then Fetch Text (mocked network call)...")
+        link_resource = db.create_resource(
+            "Some Article", resource_type="link", source_url="https://example.com/article"
+        )
+        real_fetch_url_text = fetch_module.fetch_url_text
+
+        def fake_fetch_ok(url):
+            assert url == "https://example.com/article"
+            return fetch_module.FetchResult(title=None, text="Fetched article body text about asbestos.")
+
+        fetch_module.fetch_url_text = fake_fetch_ok
+        try:
+            app._fetch_resource_text(link_resource.id)
+        finally:
+            fetch_module.fetch_url_text = real_fetch_url_text
+        updated = db.get_resource(link_resource.id)
+        assert updated.extracted_text == "Fetched article body text about asbestos."
+        print("  -> extracted_text saved from the (mocked) fetch")
+
+        print("  -> and it's now findable by search, not just by title...")
+        search_hits = db.search("asbestos")
+        assert any(r.id == link_resource.id for r in search_hits["resources"])
+        print("     confirmed: fetched text is searchable")
+
+        print("resource detail: extracted text preview renders...")
+        app.show_resource_detail(link_resource.id)
+        extracted_section = app.content.controls[5]
+        preview_container = extracted_section.controls[1]
+        assert "Fetched article body text" in preview_container.content.value
+        print("  -> preview shows the fetched text")
+
+        print("resource detail: edit the link field via on_blur...")
+        link_row = app.content.controls[4]
+        url_field_ctrl = link_row.controls[0]
+        assert url_field_ctrl.value == "https://example.com/article"
+        url_field_ctrl.value = "https://example.com/updated-article"
+        url_field_ctrl.on_blur(FakeEvent(url_field_ctrl))
+        assert db.get_resource(link_resource.id).source_url == "https://example.com/updated-article"
+        print("  -> on_blur updates source_url")
+
+        print("resource: open link calls page.launch_url with the saved URL...")
+        app._open_resource_link(link_resource.id)
+        assert page.launched_urls == ["https://example.com/updated-article"]
+        print("  -> launch_url called correctly")
+
+        print("resource: a failed fetch shows a message dialog instead of crashing...")
+
+        def fake_fetch_fail(url):
+            raise fetch_module.FetchError("Couldn't reach that URL: timeout")
+
+        fetch_module.fetch_url_text = fake_fetch_fail
+        try:
+            app._fetch_resource_text(link_resource.id)
+        finally:
+            fetch_module.fetch_url_text = real_fetch_url_text
+        dialog = page._dialog
+        assert dialog is not None
+        assert "Couldn't reach that URL" in dialog.content.value
+        page.pop_dialog()
+        # the earlier successful fetch's text must still be there — a failed
+        # re-fetch should not wipe out previously-saved extracted text
+        assert db.get_resource(link_resource.id).extracted_text == "Fetched article body text about asbestos."
+        print("  -> error dialog shown, no crash, previous extracted text preserved")
+
+        print("resource: fetching/opening with no link yet shows a friendly message...")
+        no_link_resource = db.create_resource("No Link Yet")
+        app._fetch_resource_text(no_link_resource.id)
+        dialog = page._dialog
+        assert dialog is not None and "Add a link" in dialog.content.value
+        page.pop_dialog()
+        app._open_resource_link(no_link_resource.id)
+        dialog = page._dialog
+        assert dialog is not None and "Add a link" in dialog.content.value
+        page.pop_dialog()
+        print("  -> both cases handled without crashing")
 
         def find_text_field(control):
             """Depth-first search for the first TextField under a control tree."""

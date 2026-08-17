@@ -15,6 +15,7 @@ from pathlib import Path
 import flet as ft
 
 from neuronook import config
+from neuronook.data import fetch
 from neuronook.data.db import NeuroNookDB
 from neuronook.ui import theme
 
@@ -353,13 +354,16 @@ class NeuroNookApp:
         self._set_content(header, ft.Column(cards, spacing=10))
 
     def _resource_card(self, resource) -> ft.Control:
+        meta_row = [ft.Text(_labeled(resource.resource_type), size=12, color=theme.TEXT_SECONDARY)]
+        if resource.source_url:
+            meta_row.append(ft.Icon(ft.Icons.LINK, size=13, color=theme.ACCENT_SAGE))
         return ft.Container(
             content=ft.Row(
                 [
                     ft.Column(
                         [
                             ft.Text(resource.title, size=16, weight=ft.FontWeight.W_600, color=theme.TEXT_PRIMARY),
-                            ft.Text(_labeled(resource.resource_type), size=12, color=theme.TEXT_SECONDARY),
+                            ft.Row(meta_row, spacing=4),
                         ],
                         spacing=2,
                     ),
@@ -382,6 +386,10 @@ class NeuroNookApp:
             value="note",
             options=[ft.DropdownOption(key=t, text=_labeled(t)) for t in RESOURCE_TYPES],
         )
+        url_field = ft.TextField(
+            label="Link / URL (optional)",
+            hint_text="e.g. an article URL, or a YouTube link",
+        )
         notes_field = ft.TextField(label="Notes (optional)", multiline=True, min_lines=2, max_lines=4)
 
         def save(e):
@@ -392,6 +400,7 @@ class NeuroNookApp:
             self.db.create_resource(
                 title_field.value.strip(),
                 resource_type=type_dropdown.value or "note",
+                source_url=(url_field.value or "").strip() or None,
                 notes=notes_field.value or "",
             )
             self.page.pop_dialog()
@@ -400,7 +409,7 @@ class NeuroNookApp:
         dialog = ft.AlertDialog(
             title=ft.Text("New Resource"),
             content=ft.Column(
-                [title_field, type_dropdown, notes_field], width=380, spacing=12, tight=True
+                [title_field, type_dropdown, url_field, notes_field], width=380, spacing=12, tight=True
             ),
             actions=[
                 ft.TextButton(content=ft.Text("Cancel"), on_click=lambda e: self.page.pop_dialog()),
@@ -466,11 +475,100 @@ class NeuroNookApp:
             on_blur=lambda e: self.db.update_resource(resource_id, notes=e.control.value or ""),
         )
 
-        self._set_content(back, title_row, tag_row, notes_field)
+        url_field = ft.TextField(
+            label="Link / URL",
+            value=resource.source_url or "",
+            hint_text="e.g. an article URL, or a YouTube link",
+            expand=True,
+            on_blur=lambda e: self.db.update_resource(
+                resource_id, source_url=(e.control.value or "").strip() or None
+            ),
+        )
+        link_row = ft.Row(
+            [
+                url_field,
+                ft.IconButton(
+                    icon=ft.Icons.OPEN_IN_NEW,
+                    tooltip="Open link",
+                    on_click=lambda e: self._open_resource_link(resource_id),
+                ),
+                ft.Button(
+                    content=ft.Row(
+                        [ft.Icon(ft.Icons.DOWNLOAD_OUTLINED, size=16), ft.Text("Fetch Text")],
+                        spacing=6,
+                        tight=True,
+                    ),
+                    bgcolor=theme.ACCENT_SAGE,
+                    color="#FFFFFF",
+                    on_click=lambda e: self._fetch_resource_text(resource_id),
+                ),
+            ]
+        )
+
+        extracted_text = resource.extracted_text or ""
+        preview = extracted_text if len(extracted_text) <= 1200 else extracted_text[:1200] + "…"
+        extracted_section = ft.Column(
+            [
+                ft.Text("Extracted Text (searchable)", size=14, weight=ft.FontWeight.W_600, color=theme.TEXT_PRIMARY),
+                ft.Container(
+                    content=ft.Text(
+                        preview
+                        or 'Not fetched yet — add a link above, then click "Fetch Text" to pull in the '
+                        "page's text (or a YouTube video's transcript) so it shows up in Search.",
+                        size=12,
+                        color=theme.TEXT_PRIMARY if extracted_text else theme.TEXT_SECONDARY,
+                        italic=not bool(extracted_text),
+                        selectable=True,
+                    ),
+                    bgcolor=theme.SURFACE_ALT,
+                    border=ft.Border.all(1, theme.BORDER),
+                    border_radius=theme.RADIUS,
+                    padding=12,
+                ),
+            ],
+            spacing=6,
+        )
+
+        self._set_content(back, title_row, tag_row, notes_field, link_row, extracted_section)
 
     def _delete_resource(self, resource_id: int) -> None:
         self.db.delete_resource(resource_id)
         self.show_resources()
+
+    def _open_resource_link(self, resource_id: int) -> None:
+        resource = self.db.get_resource(resource_id)
+        if resource is None:
+            return
+        if not resource.source_url:
+            self._show_message_dialog("No link yet", "Add a link/URL above first.")
+            return
+        self.page.launch_url(resource.source_url)
+
+    def _fetch_resource_text(self, resource_id: int) -> None:
+        """Pulls in searchable text for a link/video Resource.
+
+        Manual and on-demand only — this is the one place NeuroNook ever
+        makes an outbound network request, and it only happens when the
+        user clicks the button (see neuronook/data/fetch.py).
+        """
+        resource = self.db.get_resource(resource_id)
+        if resource is None:
+            return
+        if not resource.source_url:
+            self._show_message_dialog("No link yet", 'Add a link/URL above first, then click "Fetch Text".')
+            return
+
+        try:
+            result = fetch.fetch_url_text(resource.source_url)
+        except fetch.FetchError as ex:
+            self._show_message_dialog("Couldn't fetch that link", str(ex))
+            return
+
+        update_fields = {"extracted_text": result.text}
+        if result.title and not resource.title.strip():
+            update_fields["title"] = result.title
+        self.db.update_resource(resource_id, **update_fields)
+        self.show_resource_detail(resource_id)
 
     # ---- Clipboard / Tray ------------------------------------------------
 
@@ -962,15 +1060,10 @@ class NeuroNookApp:
             return  # already the current location, nothing to do
 
         if new_db_path.exists():
-            self.page.show_dialog(
-                ft.AlertDialog(
-                    title=ft.Text("A database already exists there"),
-                    content=ft.Text(
-                        f"{new_db_path} already exists. Choose an empty folder, or move/rename "
-                        "that file first if you meant to replace it."
-                    ),
-                    actions=[ft.TextButton(content=ft.Text("OK"), on_click=lambda e: self.page.pop_dialog())],
-                )
+            self._show_message_dialog(
+                "A database already exists there",
+                f"{new_db_path} already exists. Choose an empty folder, or move/rename "
+                "that file first if you meant to replace it.",
             )
             return
 
@@ -1096,6 +1189,15 @@ class NeuroNookApp:
         return sorted(entries, key=lambda p: p.name.lower())
 
     # ---- shared helpers ------------------------------------------------
+
+    def _show_message_dialog(self, title: str, message: str) -> None:
+        self.page.show_dialog(
+            ft.AlertDialog(
+                title=ft.Text(title),
+                content=ft.Text(message),
+                actions=[ft.TextButton(content=ft.Text("OK"), on_click=lambda e: self.page.pop_dialog())],
+            )
+        )
 
     def _linked_list_section(self, title, items, get_label, get_sublabel, on_open) -> ft.Control:
         rows = [

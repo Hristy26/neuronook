@@ -50,6 +50,17 @@ Each Subject gets its own page with:
 ### Resources
 The actual material — documents, photos, audio, video, notes, links.
 
+**Saved links (articles/web pages, and YouTube videos) are searchable too, on demand.** A Resource can hold a
+Link/URL. Saving the URL alone makes it findable by title, but a **"Fetch Text"** button on the Resource pulls
+in the actual content so it's searchable by what the page or video is *about*, not just its title:
+- For a normal web page, it downloads the page and extracts its visible text.
+- For a YouTube link, it pulls the video's existing captions/transcript (whatever YouTube already provides —
+  no local transcription is done for external videos).
+
+This is deliberately a manual, one-click step rather than something that happens automatically on save — in
+keeping with "the app never calls out to the internet or an AI service silently in the background." Re-fetching
+just overwrites the previously extracted text for that Resource; nothing is scheduled or repeated on its own.
+
 ### Links
 - Connect any Subject to any Resource, or any Subject to another Subject.
 - **Always bidirectional automatically** — creating a link once from either side makes it visible from both.
@@ -156,12 +167,14 @@ Similar in spirit to the existing LIUNA scanning project: runnable from a USB dr
 - Core SQLite data model: Subjects, Resources, Links (bidirectional), Tags, Clipboard items, Projects (`neuronook/data/`)
 - Flet desktop UI with 6 sections (`neuronook/ui/`):
   - **Subjects** — create/view/delete, tag, edit notes, link to Resources or other Subjects
-  - **Resources** — create/view/delete, tag, edit notes
+  - **Resources** — create/view/delete, tag, edit notes, save a Link/URL, open it in your browser, and pull in its
+    text (or a YouTube video's transcript) with a "Fetch Text" button so it becomes searchable
+    (`neuronook/data/fetch.py`)
   - **Clipboard** — add a quick link or note, promote it into a full Resource, discard to a recoverable pile, restore from there, reveal-on-click timestamps, automatic "Stale" flag on pending items older than 30 days
   - **Projects** — create/view/delete, add existing Subjects and Resources into a project, edit description
-  - **Search** — v1 keyword search across Subject names/notes and Resource titles/notes/text, results categorized by type
+  - **Search** — v1 keyword search across Subject names/notes and Resource titles/notes/text (including fetched link/transcript text), results categorized by type
   - **Settings** — choose which folder your data lives in, either by typing/pasting a path or by clicking "Browse..." to open an in-app folder browser (navigate into subfolders, go up a level, create a new folder on the spot). Built as a custom control rather than Flet's native FilePicker, since that picker only works in a `flet build`/`flet pack` app, not the plain dev client. The choice persists in `~/.neuronook/config.json` and stays the default until changed again.
-- Unit tests for the full data layer (21 pytest cases) and a UI smoke test exercising every dialog/button code path, including the data-location change flow and the folder-browser dialog (navigate, go up, create folder, select, cancel) (`tests/`)
+- Unit tests for the data layer and link/text-extraction logic (43 pytest cases across `test_db.py` and `test_fetch.py`) and a UI smoke test exercising every dialog/button code path, including the data-location change flow, the folder-browser dialog, and the link Fetch Text / open-link flow with the network call mocked out (`tests/`)
 
 **Not built yet** (next sessions): Brain Dump, voice recording + local transcription, OCR for scans, security tiers + encryption-at-rest, USB packaging (`flet pack`), aesthetic/visual polish beyond the initial color palette.
 
