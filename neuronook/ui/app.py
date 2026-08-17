@@ -35,7 +35,6 @@ class NeuroNookApp:
         self.page = page
         self.db = db
         self.content = ft.Column(expand=True, spacing=16, scroll=ft.ScrollMode.AUTO)
-        self.file_picker = ft.FilePicker()
 
     # ---- shell -------------------------------------------------------
 
@@ -49,7 +48,6 @@ class NeuroNookApp:
         page.window.height = 760
         page.window.min_width = 800
         page.window.min_height = 560
-        page.overlay.append(self.file_picker)
 
         nav_rail = ft.NavigationRail(
             selected_index=0,
@@ -891,37 +889,43 @@ class NeuroNookApp:
 
     # ---- Settings -----------------------------------------------------
 
-    def show_settings(self) -> None:
+    def show_settings(self, error: str | None = None) -> None:
         current_dir = config.get_data_dir()
 
         header = ft.Text("Settings", size=20, weight=ft.FontWeight.BOLD, color=theme.TEXT_PRIMARY)
+
+        path_field = ft.TextField(
+            label="Folder path",
+            value=str(current_dir),
+            hint_text=r"e.g. C:\Users\you\Documents\NeuroNook",
+        )
+        if error:
+            path_field.error_text = error
+
+        def save(e):
+            self._change_data_location(path_field.value or "")
 
         location_section = ft.Column(
             [
                 ft.Text("Data Location", size=14, weight=ft.FontWeight.W_600, color=theme.TEXT_PRIMARY),
                 ft.Text(
                     "Everything you create — Subjects, Resources, Clipboard items, Projects — lives in a "
-                    "single local file (neuronook.db) inside this folder. This choice is remembered and "
-                    "stays the default until you change it again.",
+                    "single local file (neuronook.db) inside this folder. Type or paste a full folder path "
+                    "and save; the app will create it if it doesn't exist yet. This choice is remembered "
+                    "and stays the default until you change it again.",
                     size=12,
                     color=theme.TEXT_SECONDARY,
                 ),
-                ft.Container(
-                    content=ft.Text(str(current_dir), size=13, color=theme.TEXT_PRIMARY),
-                    bgcolor=theme.SURFACE_ALT,
-                    border=ft.Border.all(1, theme.BORDER),
-                    border_radius=theme.RADIUS,
-                    padding=12,
-                ),
+                path_field,
                 ft.Button(
                     content=ft.Row(
-                        [ft.Icon(ft.Icons.FOLDER_OPEN_OUTLINED, size=18), ft.Text("Change Location...")],
+                        [ft.Icon(ft.Icons.SAVE_OUTLINED, size=18), ft.Text("Save Location")],
                         spacing=6,
                         tight=True,
                     ),
                     bgcolor=theme.ACCENT_SAGE,
                     color="#FFFFFF",
-                    on_click=self._change_data_location,
+                    on_click=save,
                 ),
             ],
             spacing=8,
@@ -929,13 +933,11 @@ class NeuroNookApp:
 
         self._set_content(header, location_section)
 
-    async def _change_data_location(self, e=None) -> None:
-        new_dir_str = await self.file_picker.get_directory_path(
-            dialog_title="Choose a folder for NeuroNook's data",
-            initial_directory=str(config.get_data_dir()),
-        )
+    def _change_data_location(self, new_dir_str: str) -> None:
+        new_dir_str = new_dir_str.strip()
         if not new_dir_str:
-            return  # user cancelled the picker
+            self.show_settings(error="Enter a folder path first")
+            return
 
         new_dir = Path(new_dir_str)
         new_db_path = new_dir / "neuronook.db"
@@ -957,8 +959,13 @@ class NeuroNookApp:
             )
             return
 
+        try:
+            new_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as ex:
+            self.show_settings(error=f"Couldn't create that folder: {ex}")
+            return
+
         self.db.close()
-        new_dir.mkdir(parents=True, exist_ok=True)
         if old_db_path.exists():
             shutil.move(str(old_db_path), str(new_db_path))
         config.set_data_dir(new_dir)

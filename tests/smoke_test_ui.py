@@ -4,7 +4,6 @@ this exercises the actual NeuroNookApp code paths against a fake Page
 stand-in, to catch wrong-control-API mistakes (typo'd kwargs, wrong
 control classes, etc.) before ever handing this to a real Flet client.
 """
-import asyncio
 import sys
 import tempfile
 from pathlib import Path
@@ -54,17 +53,7 @@ class FakeEvent:
         self.control = control
 
 
-class FakeFilePicker:
-    """Stand-in for ft.FilePicker — returns a fixed path instead of showing a real dialog."""
-
-    def __init__(self, path):
-        self._path = path
-
-    async def get_directory_path(self, dialog_title=None, initial_directory=None):
-        return self._path
-
-
-async def run():
+def run():
     # Redirect config's storage to a throwaway location for the duration of this
     # test run, so it never touches the real ~/.neuronook/config.json on whatever
     # machine this script runs on (including the developer's own machine).
@@ -250,26 +239,31 @@ async def run():
         print("render settings screen...")
         app.show_settings()
 
-        print("change data location...")
+        print("empty path shows an error instead of crashing...")
+        app._change_data_location("")
+        location_section = app.content.controls[1]
+        path_field = [c for c in location_section.controls if isinstance(c, ft.TextField)][0]
+        assert path_field.error_text == "Enter a folder path first"
+        print("  -> empty path rejected with an inline error")
+
+        print("change data location by typing a path...")
         new_data_dir = Path(tempfile.mkdtemp()) / "new_neuronook_data"
         old_db_path = app.db.db_path
-        app.file_picker = FakeFilePicker(str(new_data_dir))
-        await app._change_data_location()
+        app._change_data_location(str(new_data_dir))
         assert app.db.db_path == new_data_dir / "neuronook.db"
         assert app.db.db_path.exists()
         assert not old_db_path.exists()  # moved, not copied
         assert config_module.get_data_dir() == new_data_dir  # persisted for next run
         print("  -> data location changed and persisted:", app.db.db_path)
 
-        print("cancelling the picker leaves the location unchanged...")
-        app.file_picker = FakeFilePicker(None)  # simulates the user dismissing the dialog
-        await app._change_data_location()
+        print("re-saving the same path is a no-op...")
+        app._change_data_location(str(new_data_dir))
         assert app.db.db_path == new_data_dir / "neuronook.db"
-        print("  -> cancel is a no-op, as expected")
+        print("  -> no-op confirmed, no crash")
 
         app.db.close()
         print("\nALL SMOKE TESTS PASSED")
 
 
 if __name__ == "__main__":
-    asyncio.run(run())
+    run()
