@@ -160,8 +160,8 @@ Similar in spirit to the existing LIUNA scanning project: runnable from a USB dr
   - **Clipboard** — add a quick link or note, promote it into a full Resource, discard to a recoverable pile, restore from there, reveal-on-click timestamps, automatic "Stale" flag on pending items older than 30 days
   - **Projects** — create/view/delete, add existing Subjects and Resources into a project, edit description
   - **Search** — v1 keyword search across Subject names/notes and Resource titles/notes/text, results categorized by type
-  - **Settings** — choose which folder your data lives in (via a native folder picker); the choice persists in `~/.neuronook/config.json` and stays the default until changed again. Replaces the earlier hardcoded `data/` folder, which was fragile (tied to whatever directory you happened to launch the app from).
-- Unit tests for the full data layer (21 pytest cases) and a UI smoke test exercising every dialog/button code path, including the async data-location change flow (`tests/`)
+  - **Settings** — choose which folder your data lives in, either by typing/pasting a path or by clicking "Browse..." to open an in-app folder browser (navigate into subfolders, go up a level, create a new folder on the spot). Built as a custom control rather than Flet's native FilePicker, since that picker only works in a `flet build`/`flet pack` app, not the plain dev client. The choice persists in `~/.neuronook/config.json` and stays the default until changed again.
+- Unit tests for the full data layer (21 pytest cases) and a UI smoke test exercising every dialog/button code path, including the data-location change flow and the folder-browser dialog (navigate, go up, create folder, select, cancel) (`tests/`)
 
 **Not built yet** (next sessions): Brain Dump, voice recording + local transcription, OCR for scans, security tiers + encryption-at-rest, USB packaging (`flet pack`), aesthetic/visual polish beyond the initial color palette.
 

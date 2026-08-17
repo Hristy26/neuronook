@@ -236,13 +236,26 @@ def run():
         app._delete_subject(subject_id)
         assert db.list_subjects() == []
 
+        def find_text_field(control):
+            """Depth-first search for the first TextField under a control tree."""
+            if isinstance(control, ft.TextField):
+                return control
+            children = getattr(control, "controls", None)
+            if children:
+                for c in children:
+                    found = find_text_field(c)
+                    if found is not None:
+                        return found
+            return None
+
         print("render settings screen...")
         app.show_settings()
 
         print("empty path shows an error instead of crashing...")
         app._change_data_location("")
         location_section = app.content.controls[1]
-        path_field = [c for c in location_section.controls if isinstance(c, ft.TextField)][0]
+        path_field = find_text_field(location_section)
+        assert path_field is not None
         assert path_field.error_text == "Enter a folder path first"
         print("  -> empty path rejected with an inline error")
 
@@ -260,6 +273,77 @@ def run():
         app._change_data_location(str(new_data_dir))
         assert app.db.db_path == new_data_dir / "neuronook.db"
         print("  -> no-op confirmed, no crash")
+
+        print("list subfolders helper...")
+        browse_root = Path(tempfile.mkdtemp())
+        (browse_root / "Alpha").mkdir()
+        (browse_root / "beta").mkdir()
+        (browse_root / ".hidden").mkdir()
+        (browse_root / "not_a_folder.txt").write_text("x")
+        names = [p.name for p in app._list_subfolders(browse_root)]
+        assert names == ["Alpha", "beta"]  # sorted case-insensitively, dot-folders excluded, files excluded
+        assert app._list_subfolders(browse_root / "does_not_exist") == []  # missing dir -> no crash
+        print("  -> subfolders listed correctly:", names)
+
+        print("open folder browser dialog...")
+        app.show_settings()
+        location_section = app.content.controls[1]
+        row = location_section.controls[2]  # Row([path_field, Browse button])
+        path_field = row.controls[0]
+        path_field.value = str(browse_root)
+        app._open_folder_browser(path_field)
+        dialog = page._dialog
+        assert dialog is not None
+        dialog_column = dialog.content
+        path_text, divider, list_view, new_folder_row = dialog_column.controls
+        assert path_text.value == str(browse_root)
+        # rows: no "up one level" would be missing only at filesystem root, so it should be present here
+        subfolder_titles = [
+            row_ctrl.title.value for row_ctrl in list_view.controls if isinstance(row_ctrl, ft.ListTile)
+        ]
+        assert "Alpha" in subfolder_titles and "beta" in subfolder_titles
+        print("  -> dialog opened, listing:", subfolder_titles)
+
+        print("navigate into a subfolder...")
+        alpha_tile = [t for t in list_view.controls if isinstance(t, ft.ListTile) and t.title.value == "Alpha"][0]
+        alpha_tile.on_click(FakeEvent(alpha_tile))
+        assert path_text.value == str(browse_root / "Alpha")
+        print("  -> navigated into Alpha")
+
+        print("navigate back up one level...")
+        up_tile = [t for t in list_view.controls if isinstance(t, ft.ListTile)][0]
+        assert up_tile.title.value == ".. (up one level)"
+        up_tile.on_click(FakeEvent(up_tile))
+        assert path_text.value == str(browse_root)
+        print("  -> navigated back up")
+
+        print("create and enter a new subfolder...")
+        new_folder_field, create_btn = new_folder_row.controls
+        new_folder_field.value = "Gamma"
+        create_btn.on_click(FakeEvent(create_btn))
+        assert (browse_root / "Gamma").is_dir()
+        assert path_text.value == str(browse_root / "Gamma")
+        assert new_folder_field.value == ""
+        print("  -> created Gamma and navigated into it")
+
+        print("select this folder writes into path_field without auto-saving...")
+        old_db_path_before_select = app.db.db_path
+        select_fn = dialog.actions[1].on_click
+        select_fn(FakeEvent(None))
+        assert page._dialog is None
+        assert path_field.value == str(browse_root / "Gamma")
+        assert app.db.db_path == old_db_path_before_select  # nothing saved yet, just typed into the field
+        print("  -> folder selected into the field, no save happened yet")
+
+        print("cancel leaves path_field untouched...")
+        app._open_folder_browser(path_field)
+        dialog = page._dialog
+        cancel_fn = dialog.actions[0].on_click
+        before_cancel = path_field.value
+        cancel_fn(FakeEvent(None))
+        assert page._dialog is None
+        assert path_field.value == before_cancel
+        print("  -> cancel confirmed, no changes")
 
         app.db.close()
         print("\nALL SMOKE TESTS PASSED")

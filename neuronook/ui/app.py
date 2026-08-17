@@ -898,6 +898,7 @@ class NeuroNookApp:
             label="Folder path",
             value=str(current_dir),
             hint_text=r"e.g. C:\Users\you\Documents\NeuroNook",
+            expand=True,
         )
         if error:
             path_field.error_text = error
@@ -910,13 +911,27 @@ class NeuroNookApp:
                 ft.Text("Data Location", size=14, weight=ft.FontWeight.W_600, color=theme.TEXT_PRIMARY),
                 ft.Text(
                     "Everything you create — Subjects, Resources, Clipboard items, Projects — lives in a "
-                    "single local file (neuronook.db) inside this folder. Type or paste a full folder path "
-                    "and save; the app will create it if it doesn't exist yet. This choice is remembered "
-                    "and stays the default until you change it again.",
+                    "single local file (neuronook.db) inside this folder. Browse for one, or type/paste a "
+                    "full path and save; the app will create it if it doesn't exist yet. This choice is "
+                    "remembered and stays the default until you change it again.",
                     size=12,
                     color=theme.TEXT_SECONDARY,
                 ),
-                path_field,
+                ft.Row(
+                    [
+                        path_field,
+                        ft.Button(
+                            content=ft.Row(
+                                [ft.Icon(ft.Icons.FOLDER_OPEN_OUTLINED, size=18), ft.Text("Browse...")],
+                                spacing=6,
+                                tight=True,
+                            ),
+                            bgcolor=theme.ACCENT_TERRACOTTA,
+                            color="#FFFFFF",
+                            on_click=lambda e: self._open_folder_browser(path_field),
+                        ),
+                    ]
+                ),
                 ft.Button(
                     content=ft.Row(
                         [ft.Icon(ft.Icons.SAVE_OUTLINED, size=18), ft.Text("Save Location")],
@@ -971,6 +986,114 @@ class NeuroNookApp:
         config.set_data_dir(new_dir)
         self.db = NeuroNookDB(new_db_path)
         self.show_settings()
+
+    def _open_folder_browser(self, path_field: ft.TextField) -> None:
+        """A self-built folder browser for Settings.
+
+        Flet's native FilePicker needs a plugin that's only bundled once
+        the app is compiled with `flet build`/`flet pack` — it doesn't
+        exist in the plain `python main.py` dev client (see the git log
+        for the bug that taught us this). This browses using the app's
+        own controls instead, so it works identically in dev mode and a
+        built app.
+        """
+        typed = Path(path_field.value) if path_field.value else None
+        start = typed if typed and typed.is_dir() else config.get_data_dir()
+        if not start.exists():
+            start = start.parent if start.parent.exists() else Path.home()
+
+        state = {"path": start}
+        path_text = ft.Text(str(state["path"]), size=13, weight=ft.FontWeight.W_600, color=theme.TEXT_PRIMARY)
+        list_view = ft.ListView(spacing=2, height=300)
+        new_folder_field = ft.TextField(label="New folder name", dense=True, expand=True)
+
+        def build_rows() -> list[ft.Control]:
+            rows = []
+            if state["path"].parent != state["path"]:
+                rows.append(
+                    ft.ListTile(
+                        leading=ft.Icon(ft.Icons.DRIVE_FOLDER_UPLOAD_OUTLINED, color=theme.TEXT_SECONDARY),
+                        title=ft.Text(".. (up one level)"),
+                        on_click=lambda e: navigate(state["path"].parent),
+                    )
+                )
+            for folder in self._list_subfolders(state["path"]):
+                rows.append(
+                    ft.ListTile(
+                        leading=ft.Icon(ft.Icons.FOLDER_OUTLINED, color=theme.ACCENT_GOLD),
+                        title=ft.Text(folder.name),
+                        on_click=lambda e, p=folder: navigate(p),
+                    )
+                )
+            if not rows:
+                rows = [ft.Text("No subfolders here.", italic=True, color=theme.TEXT_SECONDARY)]
+            return rows
+
+        def navigate(new_path: Path) -> None:
+            state["path"] = new_path
+            path_text.value = str(new_path)
+            list_view.controls = build_rows()
+            self.page.update()
+
+        def create_folder(e) -> None:
+            name = (new_folder_field.value or "").strip()
+            if not name:
+                return
+            try:
+                (state["path"] / name).mkdir(exist_ok=True)
+            except OSError:
+                return
+            new_folder_field.value = ""
+            navigate(state["path"] / name)
+
+        def select_this_folder(e) -> None:
+            path_field.value = str(state["path"])
+            self.page.pop_dialog()
+            self.page.update()
+
+        list_view.controls = build_rows()
+
+        dialog = ft.AlertDialog(
+            title=ft.Text("Browse for a Folder"),
+            content=ft.Column(
+                [
+                    path_text,
+                    ft.Divider(color=theme.BORDER),
+                    list_view,
+                    ft.Row(
+                        [
+                            new_folder_field,
+                            ft.IconButton(
+                                icon=ft.Icons.CREATE_NEW_FOLDER_OUTLINED,
+                                tooltip="Create and enter",
+                                on_click=create_folder,
+                            ),
+                        ]
+                    ),
+                ],
+                width=460,
+                height=420,
+                tight=True,
+            ),
+            actions=[
+                ft.TextButton(content=ft.Text("Cancel"), on_click=lambda e: self.page.pop_dialog()),
+                ft.Button(
+                    content=ft.Text("Select This Folder"),
+                    bgcolor=theme.ACCENT_SAGE,
+                    color="#FFFFFF",
+                    on_click=select_this_folder,
+                ),
+            ],
+        )
+        self.page.show_dialog(dialog)
+
+    @staticmethod
+    def _list_subfolders(path: Path) -> list[Path]:
+        try:
+            entries = [p for p in path.iterdir() if p.is_dir() and not p.name.startswith(".")]
+        except (PermissionError, OSError):
+            return []
+        return sorted(entries, key=lambda p: p.name.lower())
 
     # ---- shared helpers ------------------------------------------------
 
