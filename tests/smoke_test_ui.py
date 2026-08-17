@@ -128,10 +128,100 @@ def run():
         assert db.get_subject(subject_id).notes == "Updated notes"
         print("  -> notes updated")
 
+        print("add a note to clipboard...")
+        app._open_new_clipboard_dialog()
+        dialog = page._dialog
+        type_dropdown, content_field = dialog.content.controls
+        type_dropdown.value = "note"
+        content_field.value = "Call the inspector about the permit"
+        save_fn = dialog.actions[1].on_click
+        save_fn(None)
+        assert len(db.list_clipboard_items("pending")) == 1
+        print("  -> note added to clipboard")
+
+        print("add a link to clipboard...")
+        app._open_new_clipboard_dialog()
+        dialog = page._dialog
+        type_dropdown, content_field = dialog.content.controls
+        type_dropdown.value = "link"
+        content_field.value = "https://example.com/osha-guidance"
+        save_fn = dialog.actions[1].on_click
+        save_fn(None)
+        pending = db.list_clipboard_items("pending")
+        assert len(pending) == 2
+        note_item = [i for i in pending if i.item_type == "note"][0]
+        link_item = [i for i in pending if i.item_type == "link"][0]
+        print("  -> link added to clipboard")
+
+        print("render clipboard view (pending + discarded tabs)...")
+        app.show_clipboard("pending")
+        app.show_clipboard("discarded")
+
+        print("promote the note clipboard item...")
+        resources_before = len(db.list_resources())
+        app._promote_clipboard_item(note_item.id)
+        assert db.get_clipboard_item(note_item.id).status == "promoted"
+        assert len(db.list_resources()) == resources_before + 1
+        print("  -> promoted to a Resource")
+
+        print("discard then restore the link clipboard item...")
+        app._discard_clipboard_item(link_item.id)
+        assert db.get_clipboard_item(link_item.id).status == "discarded"
+        app._restore_clipboard_item(link_item.id)
+        assert db.get_clipboard_item(link_item.id).status == "pending"
+        print("  -> discard/restore round-trip works")
+
+        print("create a project and add the subject + resource...")
+        app._open_new_project_dialog()
+        dialog = page._dialog
+        name_field, desc_field = dialog.content.controls
+        name_field.value = "Asbestos Case"
+        desc_field.value = "LIUNA research"
+        save_fn = dialog.actions[1].on_click
+        save_fn(None)
+        project = db.list_projects()[0]
+        print("  -> project created:", project)
+
+        app.show_project_detail(project.id)
+        app._open_add_to_project_dialog(project.id, "subject")
+        dialog = page._dialog
+        dropdown = dialog.content.controls[0]
+        dropdown.value = str(subject_id)
+        add_fn = dialog.actions[1].on_click
+        add_fn(None)
+        assert [s.id for s in db.get_project_subjects(project.id)] == [subject_id]
+        print("  -> subject added to project")
+
+        app._open_add_to_project_dialog(project.id, "resource")
+        dialog = page._dialog
+        dropdown = dialog.content.controls[0]
+        dropdown.value = str(resource_id)
+        add_fn = dialog.actions[1].on_click
+        add_fn(None)
+        assert [r.id for r in db.get_project_resources(project.id)] == [resource_id]
+        print("  -> resource added to project")
+
+        print("edit project description via on_blur...")
+        app.show_project_detail(project.id)
+        desc_field = [c for c in app.content.controls if isinstance(c, ft.TextField)][0]
+        desc_field.value = "Updated description"
+        desc_field.on_blur(FakeEvent(desc_field))
+        assert db.get_project(project.id).description == "Updated description"
+        print("  -> project description updated")
+
+        print("run a search...")
+        app.show_search()
+        app._run_search("29 CFR")
+        assert any(isinstance(c, ft.Column) for c in app.content.controls)
+        results = db.search("29 CFR")
+        assert len(results["subjects"]) == 1
+        print("  -> search returned expected results")
+
         print("view resource detail, delete resource...")
         app.show_resource_detail(resource_id)
+        resources_before_delete = len(db.list_resources())
         app._delete_resource(resource_id)
-        assert db.list_resources() == []
+        assert len(db.list_resources()) == resources_before_delete - 1
 
         print("delete subject...")
         app._delete_subject(subject_id)

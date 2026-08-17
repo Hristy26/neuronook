@@ -119,3 +119,107 @@ def test_search_finds_across_subjects_and_resources(db):
     results = db.search("asbestos")
     assert len(results["subjects"]) == 1
     assert len(results["resources"]) == 1
+
+
+# ---- Clipboard / Tray ----------------------------------------------------
+
+
+def test_add_and_list_clipboard_items(db):
+    db.add_clipboard_item("https://example.com/article", item_type="link", source_url="https://example.com/article")
+    db.add_clipboard_item("Ask John about the permit renewal", item_type="note")
+
+    pending = db.list_clipboard_items("pending")
+    assert len(pending) == 2
+    assert pending[0].status == "pending"
+
+
+def test_promote_clipboard_item_creates_resource(db):
+    item = db.add_clipboard_item("https://example.com/guide", item_type="link", source_url="https://example.com/guide")
+    resource = db.promote_clipboard_item(item.id)
+
+    assert resource is not None
+    assert resource.resource_type == "link"
+    assert resource.source_url == "https://example.com/guide"
+
+    updated_item = db.get_clipboard_item(item.id)
+    assert updated_item.status == "promoted"
+    assert updated_item.promoted_resource_id == resource.id
+    assert db.list_clipboard_items("pending") == []
+
+
+def test_promote_note_clipboard_item(db):
+    item = db.add_clipboard_item("Remember to call the inspector", item_type="note")
+    resource = db.promote_clipboard_item(item.id)
+    assert resource.resource_type == "note"
+    assert resource.notes == "Remember to call the inspector"
+
+
+def test_cannot_promote_already_promoted_item(db):
+    item = db.add_clipboard_item("Some note", item_type="note")
+    db.promote_clipboard_item(item.id)
+    # promoting again should be a no-op (item is no longer pending)
+    assert db.promote_clipboard_item(item.id) is None
+
+
+def test_discard_and_restore_clipboard_item(db):
+    item = db.add_clipboard_item("Temporary thought", item_type="note")
+    db.discard_clipboard_item(item.id)
+
+    assert db.list_clipboard_items("pending") == []
+    discarded = db.list_clipboard_items("discarded")
+    assert len(discarded) == 1
+
+    db.restore_clipboard_item(item.id)
+    assert len(db.list_clipboard_items("pending")) == 1
+    assert db.list_clipboard_items("discarded") == []
+
+
+def test_is_stale(db):
+    item = db.add_clipboard_item("Fresh item", item_type="note")
+    assert db.is_stale(item) is False
+
+    # backdate it past the staleness threshold directly in the DB
+    db.conn.execute(
+        "UPDATE clipboard_items SET added_at = datetime('now', '-31 days') WHERE id = ?", (item.id,)
+    )
+    db.conn.commit()
+    backdated = db.get_clipboard_item(item.id)
+    assert db.is_stale(backdated) is True
+
+
+# ---- Projects --------------------------------------------------------------
+
+
+def test_create_project_and_add_items(db):
+    project = db.create_project("Asbestos Case", description="LIUNA research")
+    subject = db.create_subject("29 CFR 1926", subject_type="regulation")
+    resource = db.create_resource("OSHA guidance PDF", resource_type="document")
+
+    db.add_to_project(project.id, "subject", subject.id)
+    db.add_to_project(project.id, "resource", resource.id)
+
+    subjects = db.get_project_subjects(project.id)
+    resources = db.get_project_resources(project.id)
+    assert [s.id for s in subjects] == [subject.id]
+    assert [r.id for r in resources] == [resource.id]
+
+
+def test_remove_from_project(db):
+    project = db.create_project("Topic A")
+    subject = db.create_subject("Subject A")
+    db.add_to_project(project.id, "subject", subject.id)
+    db.remove_from_project(project.id, "subject", subject.id)
+    assert db.get_project_subjects(project.id) == []
+
+
+def test_delete_project(db):
+    project = db.create_project("Temp Project")
+    db.delete_project(project.id)
+    assert db.get_project(project.id) is None
+
+
+def test_list_projects_sorted_by_name(db):
+    db.create_project("Zeta Project")
+    db.create_project("Alpha Project")
+    names = [p.name for p in db.list_projects()]
+    assert names == ["Alpha Project", "Zeta Project"]

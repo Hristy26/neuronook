@@ -18,11 +18,17 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from datetime import datetime, timedelta
 from pathlib import Path
 
-from .models import Link, Resource, Subject, Tag
+from .models import ClipboardItem, Link, Project, Resource, Subject, Tag
 
 SCHEMA_PATH = Path(__file__).parent / "schema.sql"
+
+# A clipboard item older than this (and still pending) is considered
+# stale — flagged in the UI as something that might be worth re-checking
+# (design doc: "flag for stale/older items").
+STALE_AFTER_DAYS = 30
 
 
 class NeuroNookDB:
@@ -240,6 +246,124 @@ class NeuroNookDB:
     def all_tags(self) -> list[Tag]:
         rows = self.conn.execute("SELECT * FROM tags ORDER BY name COLLATE NOCASE").fetchall()
         return [Tag.from_row(r) for r in rows]
+
+    # ---- Clipboard / Tray -----------------------------------------------
+    # Low-friction capture. An item starts "pending", and is either
+    # promoted (becomes a Resource, status -> "promoted") or discarded
+    # (status -> "discarded", recoverable — never hard-deleted). The table
+    # itself is the time-stamped log of everything ever added.
+
+    def add_clipboard_item(
+        self, content: str, item_type: str = "note", source_url: str | None = None
+    ) -> ClipboardItem:
+        cur = self.conn.execute(
+            "INSERT INTO clipboard_items (content, item_type, source_url) VALUES (?, ?, ?)",
+            (content, item_type, source_url),
+        )
+        self.conn.commit()
+        return self.get_clipboard_item(cur.lastrowid)
+
+    def get_clipboard_item(self, item_id: int) -> ClipboardItem | None:
+        row = self.conn.execute("SELECT * FROM clipboard_items WHERE id = ?", (item_id,)).fetchone()
+        return ClipboardItem.from_row(row) if row else None
+
+    def list_clipboard_items(self, status: str = "pending") -> list[ClipboardItem]:
+        rows = self.conn.execute(
+            "SELECT * FROM clipboard_items WHERE status = ? ORDER BY added_at DESC", (status,)
+        ).fetchall()
+        return [ClipboardItem.from_row(r) for r in rows]
+
+    def is_stale(self, item: ClipboardItem) -> bool:
+        if not item.added_at:
+            return False
+        added = datetime.strptime(item.added_at, "%Y-%m-%d %H:%M:%S")
+        return datetime.now() - added > timedelta(days=STALE_AFTER_DAYS)
+
+    def promote_clipboard_item(self, item_id: int) -> Resource | None:
+        """Create a Resource from a pending clipboard item and mark it promoted.
+
+        Returns the new Resource so the caller can immediately open its
+        detail page to tag it, link it to a Subject, or add it to a
+        Project — enrichment happens there, same as any other Resource.
+        """
+        item = self.get_clipboard_item(item_id)
+        if item is None or item.status != "pending":
+            return None
+        if item.item_type == "link":
+            resource = self.create_resource(
+                title=item.content, resource_type="link", source_url=item.source_url or item.content
+            )
+        else:
+            resource = self.create_resource(title=item.content[:80], resource_type="note", notes=item.content)
+        self.conn.execute(
+            "UPDATE clipboard_items SET status = 'promoted', promoted_resource_id = ? WHERE id = ?",
+            (resource.id, item_id),
+        )
+        self.conn.commit()
+        return resource
+
+    def discard_clipboard_item(self, item_id: int) -> None:
+        self.conn.execute("UPDATE clipboard_items SET status = 'discarded' WHERE id = ?", (item_id,))
+        self.conn.commit()
+
+    def restore_clipboard_item(self, item_id: int) -> None:
+        self.conn.execute("UPDATE clipboard_items SET status = 'pending' WHERE id = ?", (item_id,))
+        self.conn.commit()
+
+    # ---- Projects -------------------------------------------------------
+
+    def create_project(self, name: str, description: str = "") -> Project:
+        cur = self.conn.execute(
+            "INSERT INTO projects (name, description) VALUES (?, ?)", (name, description)
+        )
+        self.conn.commit()
+        return self.get_project(cur.lastrowid)
+
+    def get_project(self, project_id: int) -> Project | None:
+        row = self.conn.execute("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone()
+        return Project.from_row(row) if row else None
+
+    def list_projects(self) -> list[Project]:
+        rows = self.conn.execute("SELECT * FROM projects ORDER BY name COLLATE NOCASE").fetchall()
+        return [Project.from_row(r) for r in rows]
+
+    def delete_project(self, project_id: int) -> None:
+        self.conn.execute("DELETE FROM projects WHERE id = ?", (project_id,))
+        self.conn.commit()
+
+    def add_to_project(self, project_id: int, entity_type: str, entity_id: int) -> None:
+        if entity_type not in ("subject", "resource"):
+            raise ValueError("entity_type must be 'subject' or 'resource'")
+        self.conn.execute(
+            "INSERT OR IGNORE INTO project_items (project_id, entity_type, entity_id) VALUES (?, ?, ?)",
+            (project_id, entity_type, entity_id),
+        )
+        self.conn.commit()
+
+    def remove_from_project(self, project_id: int, entity_type: str, entity_id: int) -> None:
+        self.conn.execute(
+            "DELETE FROM project_items WHERE project_id = ? AND entity_type = ? AND entity_id = ?",
+            (project_id, entity_type, entity_id),
+        )
+        self.conn.commit()
+
+    def get_project_subjects(self, project_id: int) -> list[Subject]:
+        rows = self.conn.execute(
+            """SELECT s.* FROM subjects s
+               JOIN project_items pi ON pi.entity_type = 'subject' AND pi.entity_id = s.id
+               WHERE pi.project_id = ? ORDER BY s.name COLLATE NOCASE""",
+            (project_id,),
+        ).fetchall()
+        return [Subject.from_row(r) for r in rows]
+
+    def get_project_resources(self, project_id: int) -> list[Resource]:
+        rows = self.conn.execute(
+            """SELECT r.* FROM resources r
+               JOIN project_items pi ON pi.entity_type = 'resource' AND pi.entity_id = r.id
+               WHERE pi.project_id = ? ORDER BY r.updated_at DESC""",
+            (project_id,),
+        ).fetchall()
+        return [Resource.from_row(r) for r in rows]
 
     # ---- Search (v1: simple keyword/phrase search) ---------------------
 

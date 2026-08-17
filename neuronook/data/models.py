@@ -92,3 +92,43 @@ class Tag:
     @classmethod
     def from_row(cls, row) -> "Tag":
         return cls(id=row["id"], name=row["name"])
+
+
+@dataclass
+class ClipboardItem:
+    id: int | None
+    content: str
+    item_type: str = "note"  # "link" | "note"
+    source_url: str | None = None
+    status: str = "pending"  # "pending" | "promoted" | "discarded"
+    promoted_resource_id: int | None = None
+    added_at: str | None = None
+
+    @classmethod
+    def from_row(cls, row) -> "ClipboardItem":
+        return cls(
+            id=row["id"],
+            content=row["content"],
+            item_type=row["item_type"],
+            source_url=row["source_url"],
+            status=row["status"],
+            promoted_resource_id=row["promoted_resource_id"],
+            added_at=row["added_at"],
+        )
+
+
+@dataclass
+class Project:
+    id: int | None
+    name: str
+    description: str = ""
+    created_at: str | None = None
+
+    @classmethod
+    def from_row(cls, row) -> "Project":
+        return cls(
+            id=row["id"],
+            name=row["name"],
+            description=row["description"] or "",
+            created_at=row["created_at"],
+        )

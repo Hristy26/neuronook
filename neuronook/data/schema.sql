@@ -9,8 +9,11 @@
 --   Links     = connections between a Subject and a Resource, or between
 --               two Subjects. Always readable from both directions.
 --   Tags      = freeform labels attachable to Subjects or Resources.
+--   Clipboard = a low-friction inbox for links/notes not filed yet.
+--               Promoting an item creates a Resource; declining sends it
+--               to a recoverable "discarded" pile (nothing is hard-deleted).
 --   Projects  = higher-level containers grouping items from one research
---               effort (stubbed here, built out in a later session).
+--               effort.
 
 PRAGMA foreign_keys = ON;
 
@@ -72,7 +75,24 @@ CREATE TABLE IF NOT EXISTS tag_links (
     UNIQUE (tag_id, entity_type, entity_id)
 );
 
--- Stubbed for a future session (Projects/Topics containers).
+-- The Clipboard/Tray: quick capture that doesn't need to be filed right
+-- away. "Promoting" an item creates a Resource (see db.py
+-- promote_clipboard_item) and records which Resource it became.
+-- Staleness (design doc: "flag for stale/older items") is computed from
+-- added_at at read time rather than stored, so the threshold can change
+-- without a migration.
+CREATE TABLE IF NOT EXISTS clipboard_items (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    content             TEXT NOT NULL,      -- the URL (for links) or the note text
+    item_type           TEXT NOT NULL DEFAULT 'note' CHECK (item_type IN ('link', 'note')),
+    source_url          TEXT,               -- set when item_type = 'link'
+    status              TEXT NOT NULL DEFAULT 'pending'
+        CHECK (status IN ('pending', 'promoted', 'discarded')),
+    promoted_resource_id INTEGER,           -- set once promoted, points at the Resource it became
+    added_at            TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (promoted_resource_id) REFERENCES resources(id) ON DELETE SET NULL
+);
+
 CREATE TABLE IF NOT EXISTS projects (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     name        TEXT NOT NULL,
@@ -93,3 +113,5 @@ CREATE INDEX IF NOT EXISTS idx_links_a ON links (a_type, a_id);
 CREATE INDEX IF NOT EXISTS idx_links_b ON links (b_type, b_id);
 CREATE INDEX IF NOT EXISTS idx_tag_links_entity ON tag_links (entity_type, entity_id);
 CREATE INDEX IF NOT EXISTS idx_resources_text ON resources (extracted_text);
+CREATE INDEX IF NOT EXISTS idx_clipboard_status ON clipboard_items (status);
+CREATE INDEX IF NOT EXISTS idx_project_items_project ON project_items (project_id);

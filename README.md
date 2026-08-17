@@ -45,6 +45,8 @@ A native desktop window should open — no browser involved. On first run it cre
 
 Try it: click **+ New Subject**, create something like a regulation code or a contact, then **+ New Resource**, then open the Subject and use the link icon (top right) to connect them.
 
+The left-hand nav has five sections: **Subjects**, **Resources**, **Clipboard** (quick capture for links/notes you're not ready to file — promote them into a full Resource whenever you are, or discard to a recoverable pile), **Projects** (group Subjects and Resources from one research effort together), and **Search** (keyword search across everything).
+
 ---
 
 ## 3. Run the tests

@@ -19,6 +19,7 @@ RESOURCE_TYPES = [
     "document", "photo", "audio", "video", "note",
     "link", "scan", "email", "meeting_minutes",
 ]
+CLIPBOARD_TYPES = ["note", "link"]
 
 
 def _labeled(value: str) -> str:
@@ -62,6 +63,21 @@ class NeuroNookApp:
                     selected_icon=ft.Icons.DESCRIPTION,
                     label="Resources",
                 ),
+                ft.NavigationRailDestination(
+                    icon=ft.Icons.CONTENT_PASTE_OUTLINED,
+                    selected_icon=ft.Icons.CONTENT_PASTE,
+                    label="Clipboard",
+                ),
+                ft.NavigationRailDestination(
+                    icon=ft.Icons.FOLDER_OUTLINED,
+                    selected_icon=ft.Icons.FOLDER,
+                    label="Projects",
+                ),
+                ft.NavigationRailDestination(
+                    icon=ft.Icons.SEARCH_OUTLINED,
+                    selected_icon=ft.Icons.SEARCH,
+                    label="Search",
+                ),
             ],
             on_change=self._on_nav_change,
         )
@@ -97,10 +113,8 @@ class NeuroNookApp:
         self.show_subjects()
 
     def _on_nav_change(self, e: ft.Event) -> None:
-        if e.control.selected_index == 0:
-            self.show_subjects()
-        else:
-            self.show_resources()
+        pages = [self.show_subjects, self.show_resources, self.show_clipboard, self.show_projects, self.show_search]
+        pages[e.control.selected_index]()
 
     def _set_content(self, *controls: ft.Control) -> None:
         self.content.controls = list(controls)
@@ -441,6 +455,421 @@ class NeuroNookApp:
     def _delete_resource(self, resource_id: int) -> None:
         self.db.delete_resource(resource_id)
         self.show_resources()
+
+    # ---- Clipboard / Tray ------------------------------------------------
+
+    def show_clipboard(self, view: str = "pending") -> None:
+        items = self.db.list_clipboard_items(status=view)
+
+        cards = [self._clipboard_card(item) for item in items]
+        if not cards:
+            empty_msg = (
+                "Nothing here yet — drop in a link or a quick note you're not ready to file."
+                if view == "pending"
+                else "No discarded items. Anything you decline shows up here, recoverable."
+            )
+            cards = [ft.Text(empty_msg, color=theme.TEXT_SECONDARY, italic=True)]
+
+        pending_count = len(self.db.list_clipboard_items("pending"))
+        discarded_count = len(self.db.list_clipboard_items("discarded"))
+
+        tabs_row = ft.Row(
+            [
+                ft.TextButton(
+                    content=ft.Text(
+                        f"Pending ({pending_count})",
+                        weight=ft.FontWeight.BOLD if view == "pending" else ft.FontWeight.NORMAL,
+                    ),
+                    on_click=lambda e: self.show_clipboard("pending"),
+                ),
+                ft.TextButton(
+                    content=ft.Text(
+                        f"Discarded ({discarded_count})",
+                        weight=ft.FontWeight.BOLD if view == "discarded" else ft.FontWeight.NORMAL,
+                    ),
+                    on_click=lambda e: self.show_clipboard("discarded"),
+                ),
+            ]
+        )
+
+        header = ft.Row(
+            [
+                ft.Text("Clipboard", size=20, weight=ft.FontWeight.BOLD, color=theme.TEXT_PRIMARY),
+                ft.Button(
+                    content=ft.Row([ft.Icon(ft.Icons.ADD, size=18), ft.Text("Add")], spacing=6, tight=True),
+                    bgcolor=theme.ACCENT_GOLD,
+                    on_click=self._open_new_clipboard_dialog,
+                ),
+            ],
+            alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+        )
+
+        self._set_content(header, tabs_row, ft.Column(cards, spacing=10))
+
+    def _clipboard_card(self, item) -> ft.Control:
+        stale = self.db.is_stale(item)
+        icon = ft.Icons.LINK if item.item_type == "link" else ft.Icons.STICKY_NOTE_2_OUTLINED
+
+        timestamp_text = ft.Text(f"Added {item.added_at}", size=11, color=theme.TEXT_SECONDARY, visible=False)
+
+        def toggle_timestamp(e):
+            timestamp_text.visible = not timestamp_text.visible
+            self.page.update()
+
+        top_row_controls = [
+            ft.Icon(icon, color=theme.ACCENT_GOLD, size=20),
+            ft.Column(
+                [
+                    ft.Text(
+                        item.content if len(item.content) <= 90 else item.content[:87] + "...",
+                        size=14,
+                        color=theme.TEXT_PRIMARY,
+                    ),
+                    timestamp_text,
+                ],
+                spacing=2,
+                expand=True,
+            ),
+        ]
+        if stale:
+            top_row_controls.append(ft.Chip(label=ft.Text("Stale", size=11), bgcolor=theme.ACCENT_TERRACOTTA))
+
+        actions = [ft.IconButton(icon=ft.Icons.SCHEDULE, tooltip="Show/hide timestamp", on_click=toggle_timestamp)]
+        if item.status == "pending":
+            actions += [
+                ft.IconButton(
+                    icon=ft.Icons.ARCHIVE_OUTLINED,
+                    tooltip="Promote to Resource",
+                    icon_color=theme.ACCENT_SAGE,
+                    on_click=lambda e, iid=item.id: self._promote_clipboard_item(iid),
+                ),
+                ft.IconButton(
+                    icon=ft.Icons.DELETE_OUTLINE,
+                    tooltip="Discard",
+                    icon_color=theme.ACCENT_TERRACOTTA,
+                    on_click=lambda e, iid=item.id: self._discard_clipboard_item(iid),
+                ),
+            ]
+        else:
+            actions.append(
+                ft.IconButton(
+                    icon=ft.Icons.RESTORE,
+                    tooltip="Restore to pending",
+                    on_click=lambda e, iid=item.id: self._restore_clipboard_item(iid),
+                )
+            )
+
+        return ft.Container(
+            content=ft.Row(
+                [ft.Row(top_row_controls, expand=True, spacing=10), ft.Row(actions, spacing=0)],
+                alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+            ),
+            bgcolor=theme.SURFACE,
+            border=ft.Border.all(1, theme.BORDER),
+            border_radius=theme.RADIUS,
+            padding=14,
+        )
+
+    def _open_new_clipboard_dialog(self, e=None) -> None:
+        type_dropdown = ft.Dropdown(
+            label="Type", value="note", options=[ft.DropdownOption(key=t, text=_labeled(t)) for t in CLIPBOARD_TYPES]
+        )
+        content_field = ft.TextField(label="Link URL or note text", autofocus=True, multiline=True, min_lines=2, max_lines=5)
+
+        def save(e):
+            if not content_field.value or not content_field.value.strip():
+                content_field.error_text = "Add a link or a note first"
+                self.page.update()
+                return
+            content = content_field.value.strip()
+            self.db.add_clipboard_item(
+                content,
+                item_type=type_dropdown.value or "note",
+                source_url=content if type_dropdown.value == "link" else None,
+            )
+            self.page.pop_dialog()
+            self.show_clipboard("pending")
+
+        dialog = ft.AlertDialog(
+            title=ft.Text("Add to Clipboard"),
+            content=ft.Column([type_dropdown, content_field], width=380, spacing=12, tight=True),
+            actions=[
+                ft.TextButton(content=ft.Text("Cancel"), on_click=lambda e: self.page.pop_dialog()),
+                ft.Button(content=ft.Text("Add"), bgcolor=theme.ACCENT_GOLD, on_click=save),
+            ],
+        )
+        self.page.show_dialog(dialog)
+
+    def _promote_clipboard_item(self, item_id: int) -> None:
+        resource = self.db.promote_clipboard_item(item_id)
+        if resource:
+            self.show_resource_detail(resource.id)
+        else:
+            self.show_clipboard("pending")
+
+    def _discard_clipboard_item(self, item_id: int) -> None:
+        self.db.discard_clipboard_item(item_id)
+        self.show_clipboard("pending")
+
+    def _restore_clipboard_item(self, item_id: int) -> None:
+        self.db.restore_clipboard_item(item_id)
+        self.show_clipboard("discarded")
+
+    # ---- Projects ---------------------------------------------------------
+
+    def show_projects(self) -> None:
+        projects = self.db.list_projects()
+
+        cards = [self._project_card(p) for p in projects]
+        if not cards:
+            cards = [
+                ft.Text(
+                    "No Projects yet — group Subjects and Resources from one research effort together here.",
+                    color=theme.TEXT_SECONDARY,
+                    italic=True,
+                )
+            ]
+
+        header = ft.Row(
+            [
+                ft.Text("Projects", size=20, weight=ft.FontWeight.BOLD, color=theme.TEXT_PRIMARY),
+                ft.Button(
+                    content=ft.Row(
+                        [ft.Icon(ft.Icons.ADD, size=18), ft.Text("New Project")], spacing=6, tight=True
+                    ),
+                    bgcolor=theme.ACCENT_SAGE,
+                    color="#FFFFFF",
+                    on_click=self._open_new_project_dialog,
+                ),
+            ],
+            alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+        )
+
+        self._set_content(header, ft.Column(cards, spacing=10))
+
+    def _project_card(self, project) -> ft.Control:
+        item_count = len(self.db.get_project_subjects(project.id)) + len(self.db.get_project_resources(project.id))
+        return ft.Container(
+            content=ft.Row(
+                [
+                    ft.Column(
+                        [
+                            ft.Text(project.name, size=16, weight=ft.FontWeight.W_600, color=theme.TEXT_PRIMARY),
+                            ft.Text(f"{item_count} item(s)", size=12, color=theme.TEXT_SECONDARY),
+                        ],
+                        spacing=2,
+                    ),
+                    ft.IconButton(icon=ft.Icons.CHEVRON_RIGHT, icon_color=theme.TEXT_SECONDARY),
+                ],
+                alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+            ),
+            bgcolor=theme.SURFACE,
+            border=ft.Border.all(1, theme.BORDER),
+            border_radius=theme.RADIUS,
+            padding=16,
+            on_click=lambda e, pid=project.id: self.show_project_detail(pid),
+            ink=True,
+        )
+
+    def _open_new_project_dialog(self, e=None) -> None:
+        name_field = ft.TextField(label="Project name", autofocus=True)
+        desc_field = ft.TextField(label="Description (optional)", multiline=True, min_lines=2, max_lines=4)
+
+        def save(e):
+            if not name_field.value or not name_field.value.strip():
+                name_field.error_text = "Give it a name first"
+                self.page.update()
+                return
+            self.db.create_project(name_field.value.strip(), description=desc_field.value or "")
+            self.page.pop_dialog()
+            self.show_projects()
+
+        dialog = ft.AlertDialog(
+            title=ft.Text("New Project"),
+            content=ft.Column([name_field, desc_field], width=380, spacing=12, tight=True),
+            actions=[
+                ft.TextButton(content=ft.Text("Cancel"), on_click=lambda e: self.page.pop_dialog()),
+                ft.Button(content=ft.Text("Save"), bgcolor=theme.ACCENT_SAGE, color="#FFFFFF", on_click=save),
+            ],
+        )
+        self.page.show_dialog(dialog)
+
+    def show_project_detail(self, project_id: int) -> None:
+        project = self.db.get_project(project_id)
+        if project is None:
+            self.show_projects()
+            return
+
+        subjects = self.db.get_project_subjects(project_id)
+        resources = self.db.get_project_resources(project_id)
+
+        back = ft.TextButton(
+            content=ft.Row([ft.Icon(ft.Icons.ARROW_BACK, size=16), ft.Text("Projects")], spacing=4, tight=True),
+            on_click=lambda e: self.show_projects(),
+        )
+
+        title_row = ft.Row(
+            [
+                ft.Text(project.name, size=22, weight=ft.FontWeight.BOLD, color=theme.TEXT_PRIMARY),
+                ft.Row(
+                    [
+                        ft.IconButton(
+                            icon=ft.Icons.PERSON_ADD_ALT_OUTLINED,
+                            tooltip="Add a Subject",
+                            on_click=lambda e: self._open_add_to_project_dialog(project_id, "subject"),
+                        ),
+                        ft.IconButton(
+                            icon=ft.Icons.NOTE_ADD_OUTLINED,
+                            tooltip="Add a Resource",
+                            on_click=lambda e: self._open_add_to_project_dialog(project_id, "resource"),
+                        ),
+                        ft.IconButton(
+                            icon=ft.Icons.DELETE_OUTLINE,
+                            tooltip="Delete Project",
+                            icon_color=theme.ACCENT_TERRACOTTA,
+                            on_click=lambda e: self._delete_project(project_id),
+                        ),
+                    ]
+                ),
+            ],
+            alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+        )
+
+        desc_field = ft.TextField(
+            label="Description",
+            value=project.description,
+            multiline=True,
+            min_lines=2,
+            max_lines=4,
+            on_blur=lambda e: self._update_project_description(project_id, e.control.value or ""),
+        )
+
+        subjects_section = self._linked_list_section(
+            "Subjects", subjects, lambda s: s.name, lambda s: _labeled(s.subject_type), self.show_subject_detail
+        )
+        resources_section = self._linked_list_section(
+            "Resources", resources, lambda r: r.title, lambda r: _labeled(r.resource_type), self.show_resource_detail
+        )
+
+        self._set_content(back, title_row, desc_field, ft.Divider(color=theme.BORDER), subjects_section, resources_section)
+
+    def _update_project_description(self, project_id: int, description: str) -> None:
+        self.db.conn.execute(
+            "UPDATE projects SET description = ? WHERE id = ?", (description, project_id)
+        )
+        self.db.conn.commit()
+
+    def _delete_project(self, project_id: int) -> None:
+        self.db.delete_project(project_id)
+        self.show_projects()
+
+    def _open_add_to_project_dialog(self, project_id: int, entity_type: str) -> None:
+        if entity_type == "subject":
+            items = self.db.list_subjects()
+            label = "Subject"
+        else:
+            items = self.db.list_resources()
+            label = "Resource"
+        options = [ft.DropdownOption(key=str(i.id), text=(i.name if entity_type == "subject" else i.title)) for i in items]
+
+        if not options:
+            self.page.show_dialog(
+                ft.AlertDialog(
+                    title=ft.Text(f"No {label}s yet"),
+                    content=ft.Text(f"Create a {label} first, then come back to add it here."),
+                    actions=[ft.TextButton(content=ft.Text("OK"), on_click=lambda e: self.page.pop_dialog())],
+                )
+            )
+            return
+
+        dropdown = ft.Dropdown(label=label, options=options)
+
+        def add(e):
+            if dropdown.value:
+                self.db.add_to_project(project_id, entity_type, int(dropdown.value))
+            self.page.pop_dialog()
+            self.show_project_detail(project_id)
+
+        dialog = ft.AlertDialog(
+            title=ft.Text(f"Add {label} to Project"),
+            content=ft.Column([dropdown], width=380, tight=True),
+            actions=[
+                ft.TextButton(content=ft.Text("Cancel"), on_click=lambda e: self.page.pop_dialog()),
+                ft.Button(content=ft.Text("Add"), bgcolor=theme.ACCENT_SAGE, color="#FFFFFF", on_click=add),
+            ],
+        )
+        self.page.show_dialog(dialog)
+
+    # ---- Search (v1: keyword/phrase) --------------------------------------
+
+    def show_search(self) -> None:
+        search_field = ft.TextField(
+            label="Search Subjects and Resources",
+            autofocus=True,
+            on_submit=lambda e: self._run_search(search_field.value or ""),
+            expand=True,
+        )
+        search_button = ft.Button(
+            content=ft.Text("Search"),
+            bgcolor=theme.ACCENT_SAGE,
+            color="#FFFFFF",
+            on_click=lambda e: self._run_search(search_field.value or ""),
+        )
+
+        header = ft.Text("Search", size=20, weight=ft.FontWeight.BOLD, color=theme.TEXT_PRIMARY)
+        search_row = ft.Row([search_field, search_button])
+        hint = ft.Text(
+            "Keyword search across Subject names/notes and Resource titles/notes/text.",
+            size=12,
+            italic=True,
+            color=theme.TEXT_SECONDARY,
+        )
+
+        self._set_content(header, search_row, hint)
+
+    def _run_search(self, query: str) -> None:
+        query = query.strip()
+        if not query:
+            return
+        results = self.db.search(query)
+
+        header = ft.Text("Search", size=20, weight=ft.FontWeight.BOLD, color=theme.TEXT_PRIMARY)
+        search_field = ft.TextField(
+            label="Search Subjects and Resources",
+            value=query,
+            on_submit=lambda e: self._run_search(search_field.value or ""),
+            expand=True,
+        )
+        search_button = ft.Button(
+            content=ft.Text("Search"),
+            bgcolor=theme.ACCENT_SAGE,
+            color="#FFFFFF",
+            on_click=lambda e: self._run_search(search_field.value or ""),
+        )
+        search_row = ft.Row([search_field, search_button])
+
+        subject_results = results["subjects"]
+        resource_results = results["resources"]
+
+        sections = [header, search_row]
+        sections.append(
+            ft.Text(
+                f"{len(subject_results) + len(resource_results)} result(s) for \"{query}\"",
+                size=13,
+                color=theme.TEXT_SECONDARY,
+            )
+        )
+
+        if subject_results:
+            sections.append(ft.Text("Subjects", size=14, weight=ft.FontWeight.W_600, color=theme.TEXT_PRIMARY))
+            sections.append(ft.Column([self._subject_card(s) for s in subject_results], spacing=8))
+        if resource_results:
+            sections.append(ft.Text("Resources", size=14, weight=ft.FontWeight.W_600, color=theme.TEXT_PRIMARY))
+            sections.append(ft.Column([self._resource_card(r) for r in resource_results], spacing=8))
+        if not subject_results and not resource_results:
+            sections.append(ft.Text("No matches.", italic=True, color=theme.TEXT_SECONDARY))
+
+        self._set_content(*sections)
 
     # ---- shared helpers ------------------------------------------------
 
