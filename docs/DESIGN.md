@@ -154,13 +154,14 @@ Similar in spirit to the existing LIUNA scanning project: runnable from a USB dr
 
 **Built so far:**
 - Core SQLite data model: Subjects, Resources, Links (bidirectional), Tags, Clipboard items, Projects (`neuronook/data/`)
-- Flet desktop UI with 5 sections (`neuronook/ui/`):
+- Flet desktop UI with 6 sections (`neuronook/ui/`):
   - **Subjects** — create/view/delete, tag, edit notes, link to Resources or other Subjects
   - **Resources** — create/view/delete, tag, edit notes
   - **Clipboard** — add a quick link or note, promote it into a full Resource, discard to a recoverable pile, restore from there, reveal-on-click timestamps, automatic "Stale" flag on pending items older than 30 days
   - **Projects** — create/view/delete, add existing Subjects and Resources into a project, edit description
   - **Search** — v1 keyword search across Subject names/notes and Resource titles/notes/text, results categorized by type
-- Unit tests for the full data layer (21 pytest cases) and a UI smoke test exercising every dialog/button code path (`tests/`)
+  - **Settings** — choose which folder your data lives in (via a native folder picker); the choice persists in `~/.neuronook/config.json` and stays the default until changed again. Replaces the earlier hardcoded `data/` folder, which was fragile (tied to whatever directory you happened to launch the app from).
+- Unit tests for the full data layer (21 pytest cases) and a UI smoke test exercising every dialog/button code path, including the async data-location change flow (`tests/`)
 
 **Not built yet** (next sessions): Brain Dump, voice recording + local transcription, OCR for scans, security tiers + encryption-at-rest, USB packaging (`flet pack`), aesthetic/visual polish beyond the initial color palette.
 

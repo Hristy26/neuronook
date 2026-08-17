@@ -9,8 +9,12 @@ patterns they'll build on.
 """
 from __future__ import annotations
 
+import shutil
+from pathlib import Path
+
 import flet as ft
 
+from neuronook import config
 from neuronook.data.db import NeuroNookDB
 from neuronook.ui import theme
 
@@ -31,6 +35,7 @@ class NeuroNookApp:
         self.page = page
         self.db = db
         self.content = ft.Column(expand=True, spacing=16, scroll=ft.ScrollMode.AUTO)
+        self.file_picker = ft.FilePicker()
 
     # ---- shell -------------------------------------------------------
 
@@ -44,6 +49,7 @@ class NeuroNookApp:
         page.window.height = 760
         page.window.min_width = 800
         page.window.min_height = 560
+        page.overlay.append(self.file_picker)
 
         nav_rail = ft.NavigationRail(
             selected_index=0,
@@ -77,6 +83,11 @@ class NeuroNookApp:
                     icon=ft.Icons.SEARCH_OUTLINED,
                     selected_icon=ft.Icons.SEARCH,
                     label="Search",
+                ),
+                ft.NavigationRailDestination(
+                    icon=ft.Icons.SETTINGS_OUTLINED,
+                    selected_icon=ft.Icons.SETTINGS,
+                    label="Settings",
                 ),
             ],
             on_change=self._on_nav_change,
@@ -113,7 +124,14 @@ class NeuroNookApp:
         self.show_subjects()
 
     def _on_nav_change(self, e: ft.Event) -> None:
-        pages = [self.show_subjects, self.show_resources, self.show_clipboard, self.show_projects, self.show_search]
+        pages = [
+            self.show_subjects,
+            self.show_resources,
+            self.show_clipboard,
+            self.show_projects,
+            self.show_search,
+            self.show_settings,
+        ]
         pages[e.control.selected_index]()
 
     def _set_content(self, *controls: ft.Control) -> None:
@@ -871,6 +889,82 @@ class NeuroNookApp:
 
         self._set_content(*sections)
 
+    # ---- Settings -----------------------------------------------------
+
+    def show_settings(self) -> None:
+        current_dir = config.get_data_dir()
+
+        header = ft.Text("Settings", size=20, weight=ft.FontWeight.BOLD, color=theme.TEXT_PRIMARY)
+
+        location_section = ft.Column(
+            [
+                ft.Text("Data Location", size=14, weight=ft.FontWeight.W_600, color=theme.TEXT_PRIMARY),
+                ft.Text(
+                    "Everything you create — Subjects, Resources, Clipboard items, Projects — lives in a "
+                    "single local file (neuronook.db) inside this folder. This choice is remembered and "
+                    "stays the default until you change it again.",
+                    size=12,
+                    color=theme.TEXT_SECONDARY,
+                ),
+                ft.Container(
+                    content=ft.Text(str(current_dir), size=13, color=theme.TEXT_PRIMARY),
+                    bgcolor=theme.SURFACE_ALT,
+                    border=ft.Border.all(1, theme.BORDER),
+                    border_radius=theme.RADIUS,
+                    padding=12,
+                ),
+                ft.Button(
+                    content=ft.Row(
+                        [ft.Icon(ft.Icons.FOLDER_OPEN_OUTLINED, size=18), ft.Text("Change Location...")],
+                        spacing=6,
+                        tight=True,
+                    ),
+                    bgcolor=theme.ACCENT_SAGE,
+                    color="#FFFFFF",
+                    on_click=self._change_data_location,
+                ),
+            ],
+            spacing=8,
+        )
+
+        self._set_content(header, location_section)
+
+    async def _change_data_location(self, e=None) -> None:
+        new_dir_str = await self.file_picker.get_directory_path(
+            dialog_title="Choose a folder for NeuroNook's data",
+            initial_directory=str(config.get_data_dir()),
+        )
+        if not new_dir_str:
+            return  # user cancelled the picker
+
+        new_dir = Path(new_dir_str)
+        new_db_path = new_dir / "neuronook.db"
+        old_db_path = self.db.db_path
+
+        if new_db_path == old_db_path:
+            return  # already the current location, nothing to do
+
+        if new_db_path.exists():
+            self.page.show_dialog(
+                ft.AlertDialog(
+                    title=ft.Text("A database already exists there"),
+                    content=ft.Text(
+                        f"{new_db_path} already exists. Choose an empty folder, or move/rename "
+                        "that file first if you meant to replace it."
+                    ),
+                    actions=[ft.TextButton(content=ft.Text("OK"), on_click=lambda e: self.page.pop_dialog())],
+                )
+            )
+            return
+
+        self.db.close()
+        new_dir.mkdir(parents=True, exist_ok=True)
+        if old_db_path.exists():
+            shutil.move(str(old_db_path), str(new_db_path))
+        config.set_data_dir(new_dir)
+        self.db = NeuroNookDB(new_db_path)
+        self.show_settings()
+
     # ---- shared helpers ------------------------------------------------
 
     def _linked_list_section(self, title, items, get_label, get_sublabel, on_open) -> ft.Control:
@@ -940,7 +1034,7 @@ class NeuroNookApp:
 
 
 def main(page: ft.Page) -> None:
-    db = NeuroNookDB("data/neuronook.db")
+    db = NeuroNookDB(config.get_db_path())
     app = NeuroNookApp(page, db)
     app.build()
 
