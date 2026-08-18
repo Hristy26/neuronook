@@ -9,6 +9,7 @@ patterns they'll build on.
 """
 from __future__ import annotations
 
+import functools
 import os
 import shutil
 import subprocess
@@ -493,7 +494,7 @@ class NeuroNookApp:
                 ft.IconButton(
                     icon=ft.Icons.OPEN_IN_NEW,
                     tooltip="Open link",
-                    on_click=lambda e: self._open_resource_link(resource_id),
+                    on_click=functools.partial(self._open_resource_link, resource_id),
                 ),
                 ft.Button(
                     content=ft.Row(
@@ -582,14 +583,24 @@ class NeuroNookApp:
         self.db.delete_resource(resource_id)
         self.show_resources()
 
-    def _open_resource_link(self, resource_id: int) -> None:
+    async def _open_resource_link(self, resource_id: int) -> None:
+        """Opens a Resource's saved link in the default browser.
+
+        `page.launch_url` is an async method in this Flet version — it
+        must be awaited, and the on_click handler itself must be a
+        coroutine function for Flet's event dispatcher to await it (see
+        `functools.partial(self._open_resource_link, resource_id)` at
+        the call site below; a plain `lambda e: self._open_resource_link(...)`
+        would NOT be detected as async, so the click would silently do
+        nothing — no error, the browser just never opens).
+        """
         resource = self.db.get_resource(resource_id)
         if resource is None:
             return
         if not resource.source_url:
             self._show_message_dialog("No link yet", "Add a link/URL above first.")
             return
-        self.page.launch_url(resource.source_url)
+        await self.page.launch_url(resource.source_url)
 
     def _fetch_resource_text(self, resource_id: int) -> None:
         """Pulls in searchable text for a link/video Resource.
@@ -741,7 +752,7 @@ class NeuroNookApp:
                 ft.IconButton(
                     icon=ft.Icons.OPEN_IN_NEW,
                     tooltip="Open link",
-                    on_click=lambda e, iid=item.id: self._open_clipboard_link(iid),
+                    on_click=functools.partial(self._open_clipboard_link, item.id),
                 )
             )
         if item.status == "pending":
@@ -824,7 +835,10 @@ class NeuroNookApp:
         self.db.restore_clipboard_item(item_id)
         self.show_clipboard("discarded")
 
-    def _open_clipboard_link(self, item_id: int) -> None:
+    async def _open_clipboard_link(self, item_id: int) -> None:
+        """Opens a Clipboard link item's URL in the default browser.
+        See the docstring on _open_resource_link for why this has to be
+        async and bound via functools.partial rather than a lambda."""
         item = self.db.get_clipboard_item(item_id)
         if item is None:
             return
@@ -832,7 +846,7 @@ class NeuroNookApp:
         if not url:
             self._show_message_dialog("No link to open", "This item doesn't have a link saved.")
             return
-        self.page.launch_url(url)
+        await self.page.launch_url(url)
 
     # ---- Projects ---------------------------------------------------------
 

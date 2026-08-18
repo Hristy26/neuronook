@@ -4,6 +4,7 @@ this exercises the actual NeuroNookApp code paths against a fake Page
 stand-in, to catch wrong-control-API mistakes (typo'd kwargs, wrong
 control classes, etc.) before ever handing this to a real Flet client.
 """
+import asyncio
 import sys
 import tempfile
 from pathlib import Path
@@ -75,7 +76,11 @@ class FakePage:
     def pop_dialog(self):
         self._dialog = None
 
-    def launch_url(self, url):
+    async def launch_url(self, url):
+        # async to match the real ft.Page.launch_url, which the app code
+        # must `await` — this caught a real bug where the on_click
+        # handlers called it without awaiting (see app.py's
+        # _open_resource_link / _open_clipboard_link docstrings).
         self.launched_urls.append(url)
 
 
@@ -203,7 +208,12 @@ def run():
             link_card, lambda c: isinstance(c, ft.IconButton) and c.tooltip == "Open link"
         )
         assert open_link_btn is not None
-        open_link_btn.on_click(FakeEvent(open_link_btn))
+        # on_click is a functools.partial around an async method, bound with
+        # 0 remaining params -- exactly how Flet's real event dispatcher
+        # calls it (see base_control.py's iscoroutinefunction/get_param_count
+        # handling), so this mirrors real usage rather than testing a lambda
+        # shortcut that wouldn't exist in the actual app.
+        asyncio.run(open_link_btn.on_click())
         assert page.launched_urls[-1] == "https://example.com/osha-guidance"
         print("  -> clicking Open Link launched the saved URL")
 
@@ -340,7 +350,7 @@ def run():
         print("  -> on_blur updates ai_summary")
 
         print("resource: open link calls page.launch_url with the saved URL...")
-        app._open_resource_link(link_resource.id)
+        asyncio.run(app._open_resource_link(link_resource.id))
         assert page.launched_urls[-1] == "https://example.com/updated-article"
         print("  -> launch_url called correctly")
 
@@ -369,7 +379,7 @@ def run():
         dialog = page._dialog
         assert dialog is not None and "Add a link" in dialog.content.value
         page.pop_dialog()
-        app._open_resource_link(no_link_resource.id)
+        asyncio.run(app._open_resource_link(no_link_resource.id))
         dialog = page._dialog
         assert dialog is not None and "Add a link" in dialog.content.value
         page.pop_dialog()
