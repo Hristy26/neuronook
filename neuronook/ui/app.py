@@ -736,6 +736,14 @@ class NeuroNookApp:
             top_row_controls.append(ft.Chip(label=ft.Text("Stale", size=11), bgcolor=theme.ACCENT_TERRACOTTA))
 
         actions = [ft.IconButton(icon=ft.Icons.SCHEDULE, tooltip="Show/hide timestamp", on_click=toggle_timestamp)]
+        if item.item_type == "link" and (item.source_url or item.content):
+            actions.append(
+                ft.IconButton(
+                    icon=ft.Icons.OPEN_IN_NEW,
+                    tooltip="Open link",
+                    on_click=lambda e, iid=item.id: self._open_clipboard_link(iid),
+                )
+            )
         if item.status == "pending":
             actions += [
                 ft.IconButton(
@@ -815,6 +823,16 @@ class NeuroNookApp:
     def _restore_clipboard_item(self, item_id: int) -> None:
         self.db.restore_clipboard_item(item_id)
         self.show_clipboard("discarded")
+
+    def _open_clipboard_link(self, item_id: int) -> None:
+        item = self.db.get_clipboard_item(item_id)
+        if item is None:
+            return
+        url = item.source_url or item.content
+        if not url:
+            self._show_message_dialog("No link to open", "This item doesn't have a link saved.")
+            return
+        self.page.launch_url(url)
 
     # ---- Projects ---------------------------------------------------------
 

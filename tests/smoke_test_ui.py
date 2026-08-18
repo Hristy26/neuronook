@@ -197,6 +197,21 @@ def run():
         app.show_clipboard("pending")
         app.show_clipboard("discarded")
 
+        print("clipboard: link item has an Open Link button that launches the URL...")
+        link_card = app._clipboard_card(link_item)
+        open_link_btn = find_control(
+            link_card, lambda c: isinstance(c, ft.IconButton) and c.tooltip == "Open link"
+        )
+        assert open_link_btn is not None
+        open_link_btn.on_click(FakeEvent(open_link_btn))
+        assert page.launched_urls[-1] == "https://example.com/osha-guidance"
+        print("  -> clicking Open Link launched the saved URL")
+
+        print("clipboard: note items don't get an Open Link button...")
+        note_card = app._clipboard_card(note_item)
+        assert find_control(note_card, lambda c: isinstance(c, ft.IconButton) and c.tooltip == "Open link") is None
+        print("  -> confirmed, notes have no URL to open")
+
         print("promote the note clipboard item...")
         resources_before = len(db.list_resources())
         app._promote_clipboard_item(note_item.id)
@@ -326,7 +341,7 @@ def run():
 
         print("resource: open link calls page.launch_url with the saved URL...")
         app._open_resource_link(link_resource.id)
-        assert page.launched_urls == ["https://example.com/updated-article"]
+        assert page.launched_urls[-1] == "https://example.com/updated-article"
         print("  -> launch_url called correctly")
 
         print("resource: a failed fetch shows a message dialog instead of crashing...")

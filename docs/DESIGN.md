@@ -193,7 +193,7 @@ Similar in spirit to the existing LIUNA scanning project: runnable from a USB dr
     off to your OS's default player — using your computer's own built-in voice by default (no account, no key,
     no network call), or OpenAI's cloud text-to-speech automatically instead if an API key is set in Settings
     (`neuronook/data/tts.py`).
-  - **Clipboard** — add a quick link or note, promote it into a full Resource, discard to a recoverable pile, restore from there, reveal-on-click timestamps, automatic "Stale" flag on pending items older than 30 days
+  - **Clipboard** — add a quick link or note, open a link item directly in your browser without promoting it first, promote it into a full Resource, discard to a recoverable pile, restore from there, reveal-on-click timestamps, automatic "Stale" flag on pending items older than 30 days
   - **Projects** — create/view/delete, add existing Subjects and Resources into a project, edit description
   - **Search** — v1 keyword search across Subject names/notes and Resource titles/notes/text (including fetched link/transcript text), results categorized by type
   - **Settings** — choose which folder your data lives in, either by typing/pasting a path or by clicking "Browse..." to open an in-app folder browser (navigate into subfolders, go up a level, create a new folder on the spot). Also holds an *optional* OpenAI API key that upgrades Read Aloud to a cloud voice — nothing here is required for Read Aloud to work. Built as custom controls rather than Flet's native FilePicker/Audio, since those only work in a `flet build`/`flet pack` app, not the plain dev client. Both choices persist in `~/.neuronook/config.json` (plain text — no encryption tier yet) and stay the default until changed again.

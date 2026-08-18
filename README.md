@@ -45,7 +45,7 @@ A native desktop window should open — no browser involved. On first run it cre
 
 Try it: click **+ New Subject**, create something like a regulation code or a contact, then **+ New Resource**, then open the Subject and use the link icon (top right) to connect them.
 
-The left-hand nav has six sections: **Subjects**, **Resources**, **Clipboard** (quick capture for links/notes you're not ready to file — promote them into a full Resource whenever you are, or discard to a recoverable pile), **Projects** (group Subjects and Resources from one research effort together), **Search** (keyword search across everything), and **Settings** (choose where your data is saved).
+The left-hand nav has six sections: **Subjects**, **Resources**, **Clipboard** (quick capture for links/notes you're not ready to file — open a link item straight in your browser, promote it into a full Resource whenever you're ready, or discard to a recoverable pile), **Projects** (group Subjects and Resources from one research effort together), **Search** (keyword search across everything), and **Settings** (choose where your data is saved).
 
 **Saving a video or article link as a Resource:** give it a Link/URL, then click **Fetch Text** on the Resource's page. For a normal web page this pulls in the page's text; for a YouTube link it pulls in the video's existing transcript/captions. Either way, that text gets saved into the Resource and Search will then match words *from inside* the page or video, not just its title. This is a manual, one-click action — nothing is fetched automatically when you just save a link.
 
