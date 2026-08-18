@@ -14,8 +14,34 @@ import flet as ft
 
 import neuronook.config as config_module
 import neuronook.data.fetch as fetch_module
+import neuronook.data.tts as tts_module
 from neuronook.data.db import NeuroNookDB
 from neuronook.ui.app import NeuroNookApp
+
+
+def find_control(root, predicate):
+    """Depth-first search for the first control matching predicate,
+    descending through both .controls (Row/Column/etc.) and .content
+    (Container/AlertDialog/etc.) so tests don't need to hardcode exact
+    positions in the UI layout — those shift over time as sections get
+    added, and a test that breaks on every unrelated layout tweak stops
+    being useful."""
+    if predicate(root):
+        return root
+    for child in getattr(root, "controls", None) or []:
+        found = find_control(child, predicate)
+        if found is not None:
+            return found
+    content = getattr(root, "content", None)
+    if content is not None:
+        found = find_control(content, predicate)
+        if found is not None:
+            return found
+    return None
+
+
+def find_field_by_label(root, label):
+    return find_control(root, lambda c: isinstance(c, ft.TextField) and c.label == label)
 
 
 class FakeWindow:
@@ -267,19 +293,36 @@ def run():
 
         print("resource detail: extracted text preview renders...")
         app.show_resource_detail(link_resource.id)
-        extracted_section = app.content.controls[5]
-        preview_container = extracted_section.controls[1]
-        assert "Fetched article body text" in preview_container.content.value
+        preview_text_ctrl = find_control(
+            app.content, lambda c: isinstance(c, ft.Text) and "Fetched article body text" in (c.value or "")
+        )
+        assert preview_text_ctrl is not None
         print("  -> preview shows the fetched text")
 
+        print("resource detail: quick (local, no-AI) summary renders...")
+        quick_summary_label = find_control(
+            app.content, lambda c: isinstance(c, ft.Text) and c.value == "Quick Summary (auto, fully local — no AI)"
+        )
+        assert quick_summary_label is not None
+        print("  -> quick summary section present")
+
         print("resource detail: edit the link field via on_blur...")
-        link_row = app.content.controls[4]
-        url_field_ctrl = link_row.controls[0]
+        url_field_ctrl = find_field_by_label(app.content, "Link / URL")
+        assert url_field_ctrl is not None
         assert url_field_ctrl.value == "https://example.com/article"
         url_field_ctrl.value = "https://example.com/updated-article"
         url_field_ctrl.on_blur(FakeEvent(url_field_ctrl))
         assert db.get_resource(link_resource.id).source_url == "https://example.com/updated-article"
         print("  -> on_blur updates source_url")
+
+        print("resource detail: edit the AI Summary field via on_blur...")
+        ai_summary_field_ctrl = find_field_by_label(app.content, "AI Summary (optional)")
+        assert ai_summary_field_ctrl is not None
+        assert ai_summary_field_ctrl.value == ""
+        ai_summary_field_ctrl.value = "Pasted-in summary from an external AI chat."
+        ai_summary_field_ctrl.on_blur(FakeEvent(ai_summary_field_ctrl))
+        assert db.get_resource(link_resource.id).ai_summary == "Pasted-in summary from an external AI chat."
+        print("  -> on_blur updates ai_summary")
 
         print("resource: open link calls page.launch_url with the saved URL...")
         app._open_resource_link(link_resource.id)
@@ -317,25 +360,85 @@ def run():
         page.pop_dialog()
         print("  -> both cases handled without crashing")
 
-        def find_text_field(control):
-            """Depth-first search for the first TextField under a control tree."""
-            if isinstance(control, ft.TextField):
-                return control
-            children = getattr(control, "controls", None)
-            if children:
-                for c in children:
-                    found = find_text_field(c)
-                    if found is not None:
-                        return found
-            return None
+        print("resource: Read Aloud with no OpenAI key set uses the offline voice, no key required...")
+        real_synthesize_speech = tts_module.synthesize_speech
+        opened_files = []
+        app._open_file_externally = lambda path: opened_files.append(path)
+        assert config_module.get_openai_api_key() is None  # confirm no key is set yet
+
+        def fake_synthesize_offline(text, base_path, api_key=None, **kwargs):
+            assert text == "Fetched article body text about asbestos."
+            assert api_key is None  # no key set -> the offline backend should be selected
+            out_path = base_path.with_suffix(".wav")
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            out_path.write_bytes(b"fake wav bytes")
+            return out_path
+
+        tts_module.synthesize_speech = fake_synthesize_offline
+        try:
+            app._read_aloud_resource(link_resource.id)
+        finally:
+            tts_module.synthesize_speech = real_synthesize_speech
+        assert len(opened_files) == 1
+        assert opened_files[0].name == f"resource_{link_resource.id}.wav"
+        assert opened_files[0].exists()
+        print("  -> offline audio generated (mocked) and handed off to the external player, no API key needed")
+
+        print("resource: Read Aloud with an OpenAI key set uses the cloud voice instead...")
+        config_module.set_openai_api_key("sk-fake-test-key")
+
+        def fake_synthesize_openai(text, base_path, api_key=None, **kwargs):
+            assert text == "Fetched article body text about asbestos."
+            assert api_key == "sk-fake-test-key"
+            out_path = base_path.with_suffix(".mp3")
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            out_path.write_bytes(b"fake mp3 bytes")
+            return out_path
+
+        tts_module.synthesize_speech = fake_synthesize_openai
+        try:
+            app._read_aloud_resource(link_resource.id)
+        finally:
+            tts_module.synthesize_speech = real_synthesize_speech
+        assert opened_files[-1].name == f"resource_{link_resource.id}.mp3"
+        print("  -> setting an API key switches Read Aloud to the (mocked) cloud voice")
+
+        print("resource: Read Aloud with no extracted text yet shows a friendly message...")
+        app._read_aloud_resource(no_link_resource.id)
+        dialog = page._dialog
+        assert dialog is not None and dialog.title.value == "Nothing to read yet"
+        page.pop_dialog()
+        print("  -> handled without crashing")
+
+        print("resource: a failed TTS call shows a message dialog instead of crashing...")
+
+        def fake_synthesize_fail(text, base_path, api_key=None, **kwargs):
+            raise tts_module.TTSError("Couldn't generate audio with your system's voice: no driver found.")
+
+        tts_module.synthesize_speech = fake_synthesize_fail
+        try:
+            app._read_aloud_resource(link_resource.id)
+        finally:
+            tts_module.synthesize_speech = real_synthesize_speech
+        dialog = page._dialog
+        assert dialog is not None and "no driver found" in dialog.content.value
+        page.pop_dialog()
+        print("  -> TTS error dialog shown, no crash")
 
         print("render settings screen...")
         app.show_settings()
 
+        print("settings: OpenAI API key field is pre-filled and saves via Save Key...")
+        api_key_field_ctrl = find_field_by_label(app.content, "OpenAI API Key")
+        assert api_key_field_ctrl is not None
+        assert api_key_field_ctrl.value == "sk-fake-test-key"
+        app._save_openai_api_key("sk-another-key")
+        assert config_module.get_openai_api_key() == "sk-another-key"
+        print("  -> API key field pre-filled from config, and _save_openai_api_key persists changes")
+
         print("empty path shows an error instead of crashing...")
         app._change_data_location("")
-        location_section = app.content.controls[1]
-        path_field = find_text_field(location_section)
+        path_field = find_field_by_label(app.content, "Folder path")
         assert path_field is not None
         assert path_field.error_text == "Enter a folder path first"
         print("  -> empty path rejected with an inline error")

@@ -61,6 +61,9 @@ This is deliberately a manual, one-click step rather than something that happens
 keeping with "the app never calls out to the internet or an AI service silently in the background." Re-fetching
 just overwrites the previously extracted text for that Resource; nothing is scheduled or repeated on its own.
 
+**Extracted Text can also be summarized and read aloud** — see "AI Integration" below for the Quick Summary /
+AI Summary / Read Aloud features.
+
 ### Links
 - Connect any Subject to any Resource, or any Subject to another Subject.
 - **Always bidirectional automatically** — creating a link once from either side makes it visible from both.
@@ -116,7 +119,22 @@ A resumable, chat-like scratchpad for scattered or half-formed thoughts — not 
 - The app never connects to AI automatically.
 - When the user wants strategic help, they manually drag resources/notes into an external AI chat of their choice.
 - User can configure/add their own preferred AI engines and subscriptions as a personal preference — not built into the app's core logic.
-- A **"Summarize" button** is a convenience bridge: it pulls a resource's extracted text and readies it for pasting into an external AI chat. The summary that comes back can then be pasted into a field and attached permanently to that resource.
+- **Two summarization paths for a Resource's Extracted Text**, on request ("Both" was chosen when this was last discussed):
+  - **Quick Summary** — a small, fully local, no-AI extractive summarizer (`neuronook/data/summarize.py`) picks out the text's most representative sentences automatically, with no network call at all. It shows up as soon as there's Extracted Text to summarize. Good for a fast skim, not a substitute for real AI writing.
+  - **AI Summary** — the original "Summarize" bridge concept: select and copy the Extracted Text, paste it into your own external AI chat, ask for a summary, then paste what comes back into the AI Summary field. Saved permanently on the Resource.
+- **Read Aloud (text-to-speech) needs no account or API key by default.** It uses the computer's own built-in
+  voice (via the `pyttsx3` library — SAPI5 on Windows), fully offline, exactly like the rest of the app. This
+  was changed after the OpenAI-only version was first built and the user turned out not to have an OpenAI
+  account: rather than requiring one, the free offline voice became the default and OpenAI became an *optional*
+  upgrade — if an API key is set in Settings, Read Aloud switches to that cloud voice automatically (more
+  natural-sounding, costs a small amount per use); otherwise it always falls back to the offline voice, no
+  setup needed. The OpenAI path is still the narrower, deliberate exception to "external, manual only" described
+  above — text-to-speech can't be done via copy/paste the way summarizing can, so when it's used, NeuroNook
+  itself makes the API call directly rather than routing through an external chat window — but it's opt-in, not
+  required. Either way, it's manual and on-demand (nothing happens until "Read Aloud" is clicked), and the
+  generated audio is handed off to the OS's default player rather than played back in an embedded control
+  (Flet's audio control needs a compiled build to work, the same limitation that ruled out the native FilePicker
+  — see Settings below). See `neuronook/data/tts.py`.
 
 ---
 
@@ -161,7 +179,7 @@ Similar in spirit to the existing LIUNA scanning project: runnable from a USB dr
 
 ---
 
-## Build Status (updated 2026-08-17)
+## Build Status (updated 2026-08-18)
 
 **Built so far:**
 - Core SQLite data model: Subjects, Resources, Links (bidirectional), Tags, Clipboard items, Projects (`neuronook/data/`)
@@ -169,12 +187,17 @@ Similar in spirit to the existing LIUNA scanning project: runnable from a USB dr
   - **Subjects** — create/view/delete, tag, edit notes, link to Resources or other Subjects
   - **Resources** — create/view/delete, tag, edit notes, save a Link/URL, open it in your browser, and pull in its
     text (or a YouTube video's transcript) with a "Fetch Text" button so it becomes searchable
-    (`neuronook/data/fetch.py`)
+    (`neuronook/data/fetch.py`). Once there's Extracted Text: a **Quick Summary** appears automatically (local,
+    no-AI, no network — `neuronook/data/summarize.py`); an **AI Summary** field holds whatever you paste back
+    from your own external AI chat; and a **Read Aloud** button turns the Extracted Text into audio and hands it
+    off to your OS's default player — using your computer's own built-in voice by default (no account, no key,
+    no network call), or OpenAI's cloud text-to-speech automatically instead if an API key is set in Settings
+    (`neuronook/data/tts.py`).
   - **Clipboard** — add a quick link or note, promote it into a full Resource, discard to a recoverable pile, restore from there, reveal-on-click timestamps, automatic "Stale" flag on pending items older than 30 days
   - **Projects** — create/view/delete, add existing Subjects and Resources into a project, edit description
   - **Search** — v1 keyword search across Subject names/notes and Resource titles/notes/text (including fetched link/transcript text), results categorized by type
-  - **Settings** — choose which folder your data lives in, either by typing/pasting a path or by clicking "Browse..." to open an in-app folder browser (navigate into subfolders, go up a level, create a new folder on the spot). Built as a custom control rather than Flet's native FilePicker, since that picker only works in a `flet build`/`flet pack` app, not the plain dev client. The choice persists in `~/.neuronook/config.json` and stays the default until changed again.
-- Unit tests for the data layer and link/text-extraction logic (43 pytest cases across `test_db.py` and `test_fetch.py`) and a UI smoke test exercising every dialog/button code path, including the data-location change flow, the folder-browser dialog, and the link Fetch Text / open-link flow with the network call mocked out (`tests/`)
+  - **Settings** — choose which folder your data lives in, either by typing/pasting a path or by clicking "Browse..." to open an in-app folder browser (navigate into subfolders, go up a level, create a new folder on the spot). Also holds an *optional* OpenAI API key that upgrades Read Aloud to a cloud voice — nothing here is required for Read Aloud to work. Built as custom controls rather than Flet's native FilePicker/Audio, since those only work in a `flet build`/`flet pack` app, not the plain dev client. Both choices persist in `~/.neuronook/config.json` (plain text — no encryption tier yet) and stay the default until changed again.
+- Unit tests for the data layer, text-extraction, summarization, and text-to-speech logic (60 pytest cases across `test_db.py`, `test_fetch.py`, `test_summarize.py`, and `test_tts.py`) and a UI smoke test exercising every dialog/button code path, including the data-location change flow, the folder-browser dialog, the link Fetch Text / open-link flow, and the Quick Summary / AI Summary / Read Aloud flow (both the offline-default and OpenAI-upgrade paths), all with network/audio-driver calls mocked out (`tests/`)
 
 **Not built yet** (next sessions): Brain Dump, voice recording + local transcription, OCR for scans, security tiers + encryption-at-rest, USB packaging (`flet pack`), aesthetic/visual polish beyond the initial color palette.
 

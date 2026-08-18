@@ -9,13 +9,16 @@ patterns they'll build on.
 """
 from __future__ import annotations
 
+import os
 import shutil
+import subprocess
+import sys
 from pathlib import Path
 
 import flet as ft
 
 from neuronook import config
-from neuronook.data import fetch
+from neuronook.data import fetch, summarize, tts
 from neuronook.data.db import NeuroNookDB
 from neuronook.ui import theme
 
@@ -507,9 +510,20 @@ class NeuroNookApp:
 
         extracted_text = resource.extracted_text or ""
         preview = extracted_text if len(extracted_text) <= 1200 else extracted_text[:1200] + "…"
-        extracted_section = ft.Column(
+        extracted_header = ft.Row(
             [
                 ft.Text("Extracted Text (searchable)", size=14, weight=ft.FontWeight.W_600, color=theme.TEXT_PRIMARY),
+                ft.IconButton(
+                    icon=ft.Icons.VOLUME_UP_OUTLINED,
+                    tooltip="Read Aloud",
+                    on_click=lambda e: self._read_aloud_resource(resource_id),
+                ),
+            ],
+            alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+        )
+        extracted_section = ft.Column(
+            [
+                extracted_header,
                 ft.Container(
                     content=ft.Text(
                         preview
@@ -529,7 +543,40 @@ class NeuroNookApp:
             spacing=6,
         )
 
-        self._set_content(back, title_row, tag_row, notes_field, link_row, extracted_section)
+        content_controls = [back, title_row, tag_row, notes_field, link_row]
+
+        if extracted_text:
+            quick_summary = summarize.local_extractive_summary(extracted_text)
+            content_controls.append(
+                ft.Column(
+                    [
+                        ft.Text(
+                            "Quick Summary (auto, fully local — no AI)",
+                            size=13,
+                            weight=ft.FontWeight.W_600,
+                            color=theme.TEXT_PRIMARY,
+                        ),
+                        ft.Text(quick_summary, size=12, color=theme.TEXT_PRIMARY, selectable=True),
+                    ],
+                    spacing=4,
+                )
+            )
+
+        content_controls.append(extracted_section)
+
+        ai_summary_field = ft.TextField(
+            label="AI Summary (optional)",
+            value=resource.ai_summary,
+            hint_text="Select & copy the text above, paste it into your own AI chat, ask for a "
+            "summary, then paste the summary back here.",
+            multiline=True,
+            min_lines=2,
+            max_lines=6,
+            on_blur=lambda e: self.db.update_resource(resource_id, ai_summary=e.control.value or ""),
+        )
+        content_controls.append(ai_summary_field)
+
+        self._set_content(*content_controls)
 
     def _delete_resource(self, resource_id: int) -> None:
         self.db.delete_resource(resource_id)
@@ -547,9 +594,10 @@ class NeuroNookApp:
     def _fetch_resource_text(self, resource_id: int) -> None:
         """Pulls in searchable text for a link/video Resource.
 
-        Manual and on-demand only — this is the one place NeuroNook ever
-        makes an outbound network request, and it only happens when the
-        user clicks the button (see neuronook/data/fetch.py).
+        Manual and on-demand only. Along with Read Aloud below, this is
+        one of the only two places NeuroNook ever makes an outbound
+        network request, and both only happen when the user clicks the
+        button (see neuronook/data/fetch.py).
         """
         resource = self.db.get_resource(resource_id)
         if resource is None:
@@ -569,6 +617,45 @@ class NeuroNookApp:
             update_fields["title"] = result.title
         self.db.update_resource(resource_id, **update_fields)
         self.show_resource_detail(resource_id)
+
+    def _read_aloud_resource(self, resource_id: int) -> None:
+        """Turns a Resource's Extracted Text into speech, then hands the
+        resulting audio file off to the OS's default player. Manual/
+        on-demand only. No API key is required — this uses the OS's own
+        built-in voice by default, and only switches to the OpenAI
+        cloud voice automatically if a key has been set in Settings
+        (see neuronook/data/tts.py).
+        """
+        resource = self.db.get_resource(resource_id)
+        if resource is None:
+            return
+        if not (resource.extracted_text or "").strip():
+            self._show_message_dialog(
+                "Nothing to read yet", 'Click "Fetch Text" above first to pull in the article or transcript text.'
+            )
+            return
+
+        api_key = config.get_openai_api_key()
+        audio_base_path = config.get_data_dir() / "audio_cache" / f"resource_{resource_id}"
+        try:
+            audio_path = tts.synthesize_speech(resource.extracted_text, audio_base_path, api_key=api_key)
+        except tts.TTSError as ex:
+            self._show_message_dialog("Couldn't generate audio", str(ex))
+            return
+
+        self._open_file_externally(audio_path)
+
+    def _open_file_externally(self, path: Path) -> None:
+        """Hands a file off to the OS's default application for it —
+        used to play back generated audio (see the module docstring in
+        neuronook/data/tts.py for why this doesn't use an embedded Flet
+        audio control)."""
+        opener = getattr(os, "startfile", None)  # Windows only
+        if opener is not None:
+            opener(str(path))
+            return
+        open_cmd = "open" if sys.platform == "darwin" else "xdg-open"
+        subprocess.Popen([open_cmd, str(path)])
 
     # ---- Clipboard / Tray ------------------------------------------------
 
@@ -1044,7 +1131,59 @@ class NeuroNookApp:
             spacing=8,
         )
 
-        self._set_content(header, location_section)
+        api_key_field = ft.TextField(
+            label="OpenAI API Key",
+            value=config.get_openai_api_key() or "",
+            hint_text="sk-...",
+            password=True,
+            can_reveal_password=True,
+            expand=True,
+        )
+
+        tts_section = ft.Column(
+            [
+                ft.Text(
+                    "Text-to-Speech — cloud voice upgrade (optional)",
+                    size=14,
+                    weight=ft.FontWeight.W_600,
+                    color=theme.TEXT_PRIMARY,
+                ),
+                ft.Text(
+                    'The "Read Aloud" button on Resources already works with no setup, using your '
+                    "computer's own built-in voice — nothing below is required. Adding an OpenAI API key "
+                    "here switches Read Aloud to OpenAI's cloud voice instead, which sounds more natural "
+                    "but costs a small amount per use and needs an OpenAI account. Get a key at "
+                    "platform.openai.com if you want to try it, paste it below, and it's saved locally on "
+                    "this machine (in ~/.neuronook/config.json, in plain text — same place your data "
+                    "folder choice is saved; there's no encryption tier yet). Leave blank to keep using "
+                    "the free built-in voice.",
+                    size=12,
+                    color=theme.TEXT_SECONDARY,
+                ),
+                ft.Row(
+                    [
+                        api_key_field,
+                        ft.Button(
+                            content=ft.Row(
+                                [ft.Icon(ft.Icons.SAVE_OUTLINED, size=18), ft.Text("Save Key")],
+                                spacing=6,
+                                tight=True,
+                            ),
+                            bgcolor=theme.ACCENT_SAGE,
+                            color="#FFFFFF",
+                            on_click=lambda e: self._save_openai_api_key(api_key_field.value),
+                        ),
+                    ]
+                ),
+            ],
+            spacing=8,
+        )
+
+        self._set_content(header, location_section, tts_section)
+
+    def _save_openai_api_key(self, value: str) -> None:
+        config.set_openai_api_key((value or "").strip() or None)
+        self.show_settings()
 
     def _change_data_location(self, new_dir_str: str) -> None:
         new_dir_str = new_dir_str.strip()

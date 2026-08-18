@@ -9,3 +9,4 @@ dependencies:
       - flet==0.86.5
       - requests==2.32.3
       - youtube-transcript-api==1.2.4
+      - pyttsx3==2.99

@@ -1,11 +1,17 @@
 """
 NeuroNook's own tiny settings file.
 
-Right now this remembers exactly one thing: which folder your data (the
-neuronook.db file) lives in. That choice is stored outside the project
-folder — in your home directory — so it survives moving, reinstalling,
-or updating the app itself, and it stays put until you change it again
-from the Settings screen.
+Remembers two things: which folder your data (the neuronook.db file)
+lives in, and (optionally) an OpenAI API key used for the "Read Aloud"
+text-to-speech feature. Both are stored outside the project folder — in
+your home directory — so they survive moving, reinstalling, or updating
+the app itself, and stay put until changed again from the Settings
+screen.
+
+Note this file is plain, unencrypted JSON (matching the rest of the
+app's current "no security tier yet" state — see docs/DESIGN.md). If
+you set an API key here, it sits on disk in plain text until the
+password/encryption tier gets built.
 """
 from __future__ import annotations
 
@@ -51,3 +57,17 @@ def set_data_dir(path: Path) -> None:
 
 def get_db_path() -> Path:
     return get_data_dir() / "neuronook.db"
+
+
+def get_openai_api_key() -> str | None:
+    key = _load().get("openai_api_key")
+    return key or None
+
+
+def set_openai_api_key(key: str | None) -> None:
+    cfg = _load()
+    if key:
+        cfg["openai_api_key"] = key
+    else:
+        cfg.pop("openai_api_key", None)
+    _save(cfg)
